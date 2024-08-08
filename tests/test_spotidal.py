@@ -5,7 +5,7 @@
 
 import unittest
 
-from spotidal import spotidal
+from spotidal import sp_fetch
 
 
 class TestSpotidal(unittest.TestCase):
