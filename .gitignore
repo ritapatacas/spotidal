@@ -109,3 +109,8 @@ cookiecutter_env/
 .vscode/
 .idea/
 
+#
+config.yml
+
+#jsons
+jsons/
