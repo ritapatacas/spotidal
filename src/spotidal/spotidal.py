@@ -14,8 +14,30 @@ async def main():
     sp = sessions['sp']
     td = sessions['td']
 
-    _sp_fetch.fetch_and_save_spotify_playlists(sp)
-    playlists = await _td_fetch.get_all_playlists(td.user)
+    #_sp_fetch.fetch_and_save_spotify_playlists(sp)
+    playlists = await _td_fetch.get_tidal_playlists_wrapper(td)
+
+    sp_playlists = _sp_fetch.get_playlists_names_ids(sp)
+    tidal_playlists = await _td_fetch.get_tidal_playlists_wrapper(td)
+
+    matches = await find_matching_playlists(sp_playlists, tidal_playlists)
+
+    for sp_playlist, tidal_playlist in matches:
+        print(f"Match found! Spotify Playlist: {sp_playlist['name']}, Tidal Playlist: {tidal_playlist.name}")
+
+
+
+
+async def find_matching_playlists(sp_playlists, tidal_playlists):
+    matches = []
+
+    for sp_playlist in sp_playlists:
+        tidal_playlist = await  _td_fetch.pick_tidal_playlist_for_spotify_playlist(sp_playlist['name'], tidal_playlists)
+        if tidal_playlist:
+            matches.append((sp_playlist, tidal_playlist))
+
+    return matches
+
 
 
 

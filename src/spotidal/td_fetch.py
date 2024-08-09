@@ -1,10 +1,10 @@
 import asyncio
-import json
 import math
-from typing import List
 import tidalapi
-from tqdm import tqdm
+from typing import List, Mapping
 from tqdm.asyncio import tqdm as atqdm
+
+# based on git@github.com:spotify2tidal/spotify_to_tidal.git
 
 
 async def _get_all_chunks(url, session, parser, params={}) -> List[tidalapi.Track]:
@@ -12,7 +12,7 @@ async def _get_all_chunks(url, session, parser, params={}) -> List[tidalapi.Trac
         Helper function to get all items from a Tidal endpoint in parallel
         The main library doesn't provide the total number of items or expose the raw json, so use this wrapper instead
     """
-    def _make_request(offset: int=0):
+    def _make_request(offset: int = 0):
         new_params = params
         new_params['offset'] = offset
         return session.request.map_request(url, params=new_params)
@@ -25,14 +25,16 @@ async def _get_all_chunks(url, session, parser, params={}) -> List[tidalapi.Trac
     if len(items) < total:
         offsets = [limit * n for n in range(1, math.ceil(total/limit))]
         extra_results = await atqdm.gather(
-                *[asyncio.to_thread(lambda offset: session.request.map_json(_make_request(offset), parse=parser), offset) for offset in offsets],
+            *[asyncio.to_thread(lambda offset: session.request.map_json(
+                _make_request(offset), parse=parser), offset) for offset in offsets],
             desc="Fetching additional data chunks"
         )
         for extra_result in extra_results:
             items.extend(extra_result)
     return items
 
-async def get_all_playlists(user: tidalapi.User, chunk_size: int=10) -> List[tidalapi.Playlist]:
+
+async def get_all_playlists(user: tidalapi.User, chunk_size: int = 10) -> List[tidalapi.Playlist]:
     """ Get all user playlists from Tidal in chunks """
     print(f"\n\nLoading playlists from Tidal user\n")
     params = {
@@ -45,3 +47,18 @@ async def get_all_playlists(user: tidalapi.User, chunk_size: int=10) -> List[tid
         print(playlist.id, playlist.name)
 
     return chunks
+
+
+async def get_tidal_playlists_wrapper(tidal_session: tidalapi.Session) -> Mapping[str, tidalapi.Playlist]:
+    tidal_playlists = await get_all_playlists(tidal_session.user)
+    return {playlist.name: playlist for playlist in tidal_playlists}
+
+async def pick_tidal_playlist_for_spotify_playlist(spotify_playlist_name: str, tidal_playlists: Mapping[str, tidalapi.Playlist]):
+    # Check if the Spotify playlist name exists in the Tidal playlists
+    if spotify_playlist_name in tidal_playlists:
+        # If a match is found, return the corresponding Tidal playlist
+        tidal_playlist = tidal_playlists[spotify_playlist_name]
+        return tidal_playlist
+    else:
+        # Return None if no match is found
+        return None
