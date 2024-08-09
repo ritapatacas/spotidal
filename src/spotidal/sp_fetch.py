@@ -1,17 +1,20 @@
 import os
 import sys
 import json
-import sp_auth as _sp_auth
+import auth_sp as _sp_auth
 import spotipy.util as util
 
 
 
 def main():
-    session = _sp_auth.open_session()
-    playlists = get_playlists_names_ids(session)
-    #save_spotify_playlists_to_json (playlists)
-    #get_playlists_details(session)
+    return _sp_auth.get_session()
 
+
+def show_tracks(tracks):
+    for i, item in enumerate(tracks['items']):
+        track = item['track']
+        print("   %d %32.32s %s" % (i, track['artists'][0]['name'],
+            track['name']))
 
 def get_playlists_names_ids(session):
     playlists_data = session.current_user_playlists()
@@ -22,24 +25,6 @@ def get_playlists_names_ids(session):
         print(f"{p['id']}  {p['name']}")
 
     return playlists
-
-def save_spotify_playlists_to_json(playlists):
-    directory = os.path.join(os.path.dirname(__file__), '../../jsons')
-    os.makedirs(directory, exist_ok=True)
-
-    file_path = os.path.join(directory, 'spotify_playlists.json')
-    with open(file_path, 'w') as file:
-        json.dump(playlists, file, indent=4)
-
-    print("\nPlaylists saved to jsons/spotify_playlists.json")
-
-
-def show_tracks(tracks):
-    for i, item in enumerate(tracks['items']):
-        track = item['track']
-        print("   %d %32.32s %s" % (i, track['artists'][0]['name'],
-            track['name']))
-
 
 def get_playlists_details(session):
     username = session.current_user()['id']
@@ -63,7 +48,22 @@ def get_playlists_details(session):
         print("Can't get token for", username)
 
 
+def save_spotify_playlists_to_json(playlists):
+    directory = os.path.join(os.path.dirname(__file__), '../../jsons')
+    os.makedirs(directory, exist_ok=True)
+
+    file_path = os.path.join(directory, 'spotify_playlists.json')
+    with open(file_path, 'w') as file:
+        json.dump(playlists, file, indent=4)
+
+    print("\nSaved to jsons/spotify_playlists.json")
+
+
+
 
 if __name__ == '__main__':
-    main()
+    session = main()
+    playlists = get_playlists_names_ids(session)
+    save_spotify_playlists_to_json (playlists)
+    #get_playlists_details(session)
     sys.exit(0)

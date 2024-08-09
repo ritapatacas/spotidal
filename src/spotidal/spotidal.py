@@ -1,34 +1,21 @@
 import os
 import sys
 import json
-import sp_auth as _sp_auth
+import auth as _auth
+import sp_fetch as _sp_fetch
 
 
 def main():
-    spotify_session = _sp_auth.open_session()
+    print("SPOTIDAL\n\n")
+    sessions = _auth.main()
+    print(sessions)
 
-    playlists = get_spotify_playlists(spotify_session)
-    save_spotify_playlists_to_json (playlists)
 
-def get_spotify_playlists(spotify_session):
-    playlists_data = spotify_session.current_user_playlists()
-    print(f"Total Playlists: {playlists_data['total']}")
-    playlists = [{"id": playlist['id'], "name": playlist['name'], 'sync': 'off' } for playlist in playlists_data['items']]
-
-    for p in playlists:
-        print(f"{p['id']}  {p['name']}")
-
-    return playlists
-
-def save_spotify_playlists_to_json(playlists):
-    directory = os.path.join(os.path.dirname(__file__), '../../jsons')
-    os.makedirs(directory, exist_ok=True)
-
-    file_path = os.path.join(directory, 'spotify_playlists.json')
-    with open(file_path, 'w') as file:
-        json.dump(playlists, file, indent=4)
-
-    print("\nPlaylists saved to jsons/spotify_playlists.json")
+"""
+def fetch_and_save_spotify_playlists():
+    session = _sp_fetch.main()
+    playlists = _sp_fetch.get_playlists_names_ids(session)
+    _sp_fetch.save_spotify_playlists_to_json(playlists) """
 
 if __name__ == '__main__':
     main()
