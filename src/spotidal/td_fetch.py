@@ -1,6 +1,7 @@
 import asyncio
 import math
 import tidalapi
+import td_sync as _td_sync
 from typing import List, Mapping
 from tqdm.asyncio import tqdm as atqdm
 
@@ -44,15 +45,24 @@ async def get_all_playlists(user: tidalapi.User, chunk_size: int = 10) -> List[t
 
     chunks = await _get_all_chunks(f"users/{user.id}/playlists", session=user.session, parser=user.playlist.parse_factory, params=params)
 
-    #for playlist in chunks:
+    # for playlist in chunks:
     #    print("   ", playlist.id, playlist.name)
 
     return chunks
+
+async def get_all_playlist_tracks(playlist: tidalapi.Playlist, chunk_size: int=20) -> List[tidalapi.Track]:
+    """ Get all tracks from Tidal playlist in chunks """
+    params = {
+        "limit": chunk_size,
+    }
+    print(f"> Loading tracks from Tidal playlist '{playlist.name}'")
+    return await _get_all_chunks(f"{playlist._base_url%playlist.id}/tracks", session=playlist.session, parser=playlist.session.parse_track, params=params)
 
 
 async def get_tidal_playlists_wrapper(tidal_session: tidalapi.Session) -> Mapping[str, tidalapi.Playlist]:
     tidal_playlists = await get_all_playlists(tidal_session.user)
     return {playlist.name: playlist for playlist in tidal_playlists}
+
 
 async def pick_tidal_playlist_for_spotify_playlist(spotify_playlist_name: str, tidal_playlists: Mapping[str, tidalapi.Playlist]):
     if spotify_playlist_name in tidal_playlists:
@@ -64,11 +74,21 @@ async def pick_tidal_playlist_for_spotify_playlist(spotify_playlist_name: str, t
 
 async def get_playlists_names_ids(tidal_session: tidalapi.Session) -> Mapping[str, tidalapi.Playlist]:
     playlists_data = await get_all_playlists(tidal_session.user)
-    #print("> Fetching tidal playlists")
-    #print(f" > Total tidal playlists: {playlists_data['total']}")
-    playlists = [{"id": p.id, "name": p.name, 'sync': 'off' } for p in playlists_data]
+    # print("> Fetching tidal playlists")
+    # print(f" > Total tidal playlists: {playlists_data['total']}")
+    playlists = [{"id": p.id, "name": p.name, 'sync': 'off'}
+                 for p in playlists_data]
 
-    #for p in playlists:
+    # for p in playlists:
     #    print(f"    {p['id']}  {p['name']}")
 
     return playlists
+
+
+async def find_matching_playlist(sp_playlist, td_playlists):
+    for tdp in td_playlists:
+        if sp_playlist['name'] == tdp['name']:
+            return tdp['id']
+    print(f"> Didn't find a matching playlist for {sp_playlist['name']}")
+    td_playlist = _td_sync.create_new_playlist(sp_playlist)
+    return td_playlist.id
