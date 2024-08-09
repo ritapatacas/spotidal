@@ -27,24 +27,25 @@ async def _get_all_chunks(url, session, parser, params={}) -> List[tidalapi.Trac
         extra_results = await atqdm.gather(
             *[asyncio.to_thread(lambda offset: session.request.map_json(
                 _make_request(offset), parse=parser), offset) for offset in offsets],
-            desc="Fetching additional data chunks"
+            desc="> Fetching additional data chunks"
         )
         for extra_result in extra_results:
             items.extend(extra_result)
+    print(f" > Total tidal playlists: {len(items)}")
     return items
 
 
 async def get_all_playlists(user: tidalapi.User, chunk_size: int = 10) -> List[tidalapi.Playlist]:
     """ Get all user playlists from Tidal in chunks """
-    print(f"\n\nLoading playlists from Tidal user\n")
+    print(f"\n\n> Fetching tidal playlists")
     params = {
         "limit": chunk_size,
     }
 
     chunks = await _get_all_chunks(f"users/{user.id}/playlists", session=user.session, parser=user.playlist.parse_factory, params=params)
 
-    for playlist in chunks:
-        print(playlist.id, playlist.name)
+    #for playlist in chunks:
+    #    print("   ", playlist.id, playlist.name)
 
     return chunks
 
@@ -54,11 +55,20 @@ async def get_tidal_playlists_wrapper(tidal_session: tidalapi.Session) -> Mappin
     return {playlist.name: playlist for playlist in tidal_playlists}
 
 async def pick_tidal_playlist_for_spotify_playlist(spotify_playlist_name: str, tidal_playlists: Mapping[str, tidalapi.Playlist]):
-    # Check if the Spotify playlist name exists in the Tidal playlists
     if spotify_playlist_name in tidal_playlists:
-        # If a match is found, return the corresponding Tidal playlist
         tidal_playlist = tidal_playlists[spotify_playlist_name]
         return tidal_playlist
     else:
-        # Return None if no match is found
         return None
+
+
+async def get_playlists_names_ids(tidal_session: tidalapi.Session) -> Mapping[str, tidalapi.Playlist]:
+    playlists_data = await get_all_playlists(tidal_session.user)
+    #print("> Fetching tidal playlists")
+    #print(f" > Total tidal playlists: {playlists_data['total']}")
+    playlists = [{"id": p.id, "name": p.name, 'sync': 'off' } for p in playlists_data]
+
+    #for p in playlists:
+    #    print(f"    {p['id']}  {p['name']}")
+
+    return playlists

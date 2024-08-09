@@ -1,6 +1,7 @@
 import os
 import sys
 import json
+import utils
 import spotipy.util as util
 
 
@@ -12,11 +13,12 @@ def show_tracks(tracks):
 
 def get_playlists_names_ids(session):
     playlists_data = session.current_user_playlists()
-    print(f"Total Playlists: {playlists_data['total']}\n")
+    print("> Fetching Spotify playlists")
+    print(f" > Total spotify playlists: {playlists_data['total']}")
     playlists = [{"id": playlist['id'], "name": playlist['name'], 'sync': 'off' } for playlist in playlists_data['items']]
 
-    for p in playlists:
-        print(f"{p['id']}  {p['name']}")
+    #for p in playlists:
+    #    print(f"    {p['id']}  {p['name']}")
 
     return playlists
 
@@ -42,17 +44,15 @@ def get_playlists_details(session):
         print("Can't get token for", username)
 
 
-def save_spotify_playlists_to_json(playlists):
-    directory = os.path.join(os.path.dirname(__file__), '../../jsons')
-    os.makedirs(directory, exist_ok=True)
+def save_playlists_to_json(playlists):
+    file = utils.get_file_path('user_data/spotify_playlists.json')
 
-    file_path = os.path.join(directory, 'spotify_playlists.json')
-    with open(file_path, 'w') as file:
+    with open(file, 'w') as file:
         json.dump(playlists, file, indent=4)
 
-    print("\nSaved to jsons/spotify_playlists.json")
+    print("\n > Saved to user_data/spotify_playlists.json")
 
 
 def fetch_and_save_spotify_playlists(session):
     playlists = get_playlists_names_ids(session)
-    save_spotify_playlists_to_json(playlists)
+    save_playlists_to_json(playlists)

@@ -4,19 +4,16 @@ import json
 import yaml
 import webbrowser
 import tidalapi
+import utils
 from plyer import notification
 
 
-project_root = os.path.abspath(os.path.join(
-    os.path.dirname(__file__), '..', '..'))
-os.makedirs(project_root, exist_ok=True)
-session_file_path = os.path.join(project_root, 'tidal_session.yml')
-
+session_file_path = utils.get_file_path('user_data/tidal_session.yml')
 
 def open_tidal_session() -> tidalapi.Session:
     session = tidalapi.Session()
     login, future = session.login_oauth()
-    print('Login with the webbrowser: ' + login.verification_uri_complete)
+    print(' > Login with the webbrowser: ' + login.verification_uri_complete)
     url = login.verification_uri_complete
     if not url.startswith('https://'):
         url = 'https://' + url
@@ -32,7 +29,7 @@ def open_tidal_session() -> tidalapi.Session:
                     'refresh_token': session.refresh_token
                 }
             }, f)
-        print("\nTidal Session saved\n")
+        print("\n > Tidal Session saved\n")
     except OSError as e:
         print("Error saving Tidal Session: \n" + str(e))
     return session
@@ -42,7 +39,7 @@ def get_session() -> tidalapi.Session:
     try:
         with open(session_file_path, 'r') as session_file:
             previous_session = yaml.safe_load(session_file)
-            print("Previous Tidal Session loaded\n")
+            print(" > Previous Tidal Session loaded\n")
     except OSError:
         previous_session = None
     session = tidalapi.Session()
@@ -57,7 +54,7 @@ def get_session() -> tidalapi.Session:
         except Exception as e:
             print("Error loading previous Tidal Session: \n" + str(e))
     else:
-        print("No previous Tidal Session found, opening new session")
+        print(" > No previous Tidal Session found, opening new session")
         open_tidal_session()
 
 
