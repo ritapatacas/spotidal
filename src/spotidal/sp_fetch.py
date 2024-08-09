@@ -1,13 +1,7 @@
 import os
 import sys
 import json
-import auth_sp as _sp_auth
 import spotipy.util as util
-
-
-
-def main():
-    return _sp_auth.get_session()
 
 
 def show_tracks(tracks):
@@ -59,11 +53,6 @@ def save_spotify_playlists_to_json(playlists):
     print("\nSaved to jsons/spotify_playlists.json")
 
 
-
-
-if __name__ == '__main__':
-    session = main()
+def fetch_and_save_spotify_playlists(session):
     playlists = get_playlists_names_ids(session)
-    save_spotify_playlists_to_json (playlists)
-    #get_playlists_details(session)
-    sys.exit(0)
+    save_spotify_playlists_to_json(playlists)

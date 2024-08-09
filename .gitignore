@@ -111,6 +111,10 @@ cookiecutter_env/
 
 #
 config.yml
+spotify_session.yml
+tidal_session.yml
 
 #jsons
 jsons/
+
+.cache-1138870920

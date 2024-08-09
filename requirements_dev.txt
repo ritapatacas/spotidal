@@ -13,5 +13,6 @@ plyer==2.1.0
 PyYAML==6.0
 spotipy==2.22.1
 tidalapi==0.7.6
+tqdm==4.66.5
 
 

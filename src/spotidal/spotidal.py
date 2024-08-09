@@ -1,14 +1,23 @@
-import os
 import sys
-import json
+import asyncio
 import auth as _auth
 import sp_fetch as _sp_fetch
+import td_fetch as _td_fetch
 
+sp = None
+td = None
 
-def main():
+async def main():
+    global sp, td
     print("SPOTIDAL\n\n")
     sessions = _auth.main()
-    print(sessions)
+    sp = sessions['sp']
+    td = sessions['td']
+
+    _sp_fetch.fetch_and_save_spotify_playlists(sp)
+    playlists = await _td_fetch.get_all_playlists(td.user)
+
+
 
 
 """
@@ -18,5 +27,5 @@ def fetch_and_save_spotify_playlists():
     _sp_fetch.save_spotify_playlists_to_json(playlists) """
 
 if __name__ == '__main__':
-    main()
+    asyncio.run(main())
     sys.exit(0)
