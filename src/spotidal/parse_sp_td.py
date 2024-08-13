@@ -1,14 +1,14 @@
 import sys
 import asyncio
 import utils
-import td_fetch as _td_fetch
+import td_utils as _td_utils
 import sp_fetch as _sp_fetch
 
 
 async def fetch_playlists(sessions):
     playlists = {
         'sp': _sp_fetch.get_playlists_names_ids(sessions['sp']),
-        'td': await _td_fetch.get_playlists_names_ids(sessions['td'])
+        'td': await _td_utils.get_playlists_names_ids(sessions['td'])
     }
     return playlists
 
@@ -43,7 +43,7 @@ async def find_matching_playlists(playlists):
     for sp_playlist in sp_playlists:
         for td_playlist in td_playlists:
             if sp_playlist['name'] == td_playlist['name']:
-                matches.append({sp_playlist['name']: {'sp': sp_playlist['id'], 'td': td_playlist['id'], 'sync': sp_playlist['sync']}})
+                matches.append({ 'name': sp_playlist['name'], 'ids': {'sp': sp_playlist['id'], 'td': td_playlist['id'] }, 'sync': sp_playlist['sync']})
                 print(f"    Match! {sp_playlist['name']}")
                 break
     print(f"\n> Found: {len(matches)}")

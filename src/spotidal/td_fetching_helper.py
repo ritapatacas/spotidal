@@ -7,12 +7,14 @@ from tidalapi.request import Requests
 from tidalapi.session import Session
 from tqdm.asyncio import tqdm as atqdm
 
+
+## based on tidalapi_patch.py from git@github.com:spotify2tidal/spotify_to_tidal.git
+
 class TidalFetcher(Requests):
     def __init__(self, session: "Session"):
         super().__init__(session)
 
 
-    # based on git@github.com:spotify2tidal/spotify_to_tidal.git
     def get_playlist_by_id(session, playlist_id):
         requests_instance = Requests(session)
         path = f"playlists/{playlist_id}"
@@ -157,13 +159,4 @@ class TidalFetcher(Requests):
         for tdp in td_playlists:
             if sp_playlist["name"] == tdp["name"]:
                 return tdp
-
-
-
-
-
-
-###
-
-
 
