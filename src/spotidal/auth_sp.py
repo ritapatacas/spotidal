@@ -36,26 +36,11 @@ def get_session() -> spotipy.Spotify:
 
 
 
-""" def get_tidal_client():
-    return tidalapi.Session()
-
-session = get_tidal_client()
-print(session)
-
-login, future = session.login_oauth()
-
-notification.notify("Open the URL to log in", login.verification_uri_complete)
-
-def get_token():
-    credentials = get_credentials()
-    username = credentials['username']
-    scope = 'user-library-read'
-
-    token = util.prompt_for_user_token(username, scope)
-
-    if token:
-        print("Token successfully retrieved!", token)
-    else:
-        print("Failed to retrieve token.")
-
- """
+def get_username():
+    try:
+        with open(session_file_path, 'r') as session_file:
+            credentials = yaml.safe_load(session_file)
+            print(" > Spotify Credentials loaded")
+    except OSError:
+        print(" > Error loading Spotify Credentials")
+    return credentials['spotify']['username']

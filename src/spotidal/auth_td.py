@@ -58,7 +58,6 @@ def get_session() -> tidalapi.Session:
         open_tidal_session()
 
 
-
 """ def get_tidal_client():
     return tidalapi.Session()
 

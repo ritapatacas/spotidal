@@ -15,4 +15,4 @@ spotipy==2.22.1
 tidalapi==0.7.6
 tqdm==4.66.5
 
-
+sqlalchemy==2.0.32
