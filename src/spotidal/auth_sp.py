@@ -40,7 +40,6 @@ def get_username():
     try:
         with open(session_file_path, 'r') as session_file:
             credentials = yaml.safe_load(session_file)
-            print(" > Spotify Credentials loaded")
     except OSError:
-        print(" > Error loading Spotify Credentials")
+        print(" > Error getting Spotify username")
     return credentials['spotify']['username']

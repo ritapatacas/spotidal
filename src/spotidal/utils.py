@@ -3,6 +3,7 @@ import json
 import traceback
 import unicodedata
 import tidalapi
+import yaml
 import sp_types
 from typing import Sequence, Set
 from cache import track_match_cache
@@ -22,9 +23,10 @@ def save_to_json(data, file_name):
     with open(file, 'w') as file:
         json.dump(data, file, indent=4)
 
-    print(" > Saved to ", file_name)
+    print(f" > Saved {len(data)} items to {file_name}")
 
-def load_playlists_from_json(file_name):
+
+def load_from_json(file_name):
     file = get_file_path(file_name)
     with open(file, 'r') as file:
         data = json.load(file)
@@ -33,9 +35,14 @@ def load_playlists_from_json(file_name):
 def header():
     print("\n\n  ###########################                  ###########################\n  ########################        SPOTIDAL        ########################\n  ###########################                  ###########################\n\n\n")
 
+def print_json(info, data):
+    print(info, json.dumps(data, indent=4))
 
 
-
+def get_conf():
+    with open(get_file_path('config.yml'), 'r') as f:
+        config = yaml.safe_load(f)
+    return config
 
 #### from sync on git@github.com:spotify2tidal/spotify_to_tidal.git
 def normalize(s) -> str:

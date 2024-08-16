@@ -7,7 +7,7 @@ import sp_fetch as _sp_fetch
 
 
 def main():
-    print("> Getting sessions")
+    print("> Getting sessions...")
 
     session = {
         'sp': _sp_auth.get_session(),

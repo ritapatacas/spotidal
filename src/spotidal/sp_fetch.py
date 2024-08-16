@@ -76,7 +76,7 @@ async def _fetch_all_from_spotify_in_chunks(fetch_function: Callable) -> List[di
         offsets = [results['limit'] * n for n in range(1, math.ceil(results['total'] / results['limit']))]
         extra_results = await atqdm.gather(
             *[asyncio.to_thread(fetch_function, offset) for offset in offsets],
-            desc="Fetching additional data chunks"
+            desc=" > Fetching additional data chunks"
         )
         for extra_result in extra_results:
             output.extend([item['track'] for item in extra_result['items'] if item['track'] is not None])
@@ -88,7 +88,7 @@ async def get_tracks_from_spotify_playlist(spotify_session: spotipy.Spotify, spo
         fields = "next,total,limit,items(track(name,album(name,artists),artists,track_number,duration_ms,id,external_ids(isrc)))"
         return spotify_session.playlist_tracks(playlist_id=playlist_id, fields=fields, offset=offset)
 
-    print(f"Loading tracks from Spotify playlist '{spotify_playlist['name']}'")
+    #print(f" > Loading tracks from Spotify playlist '{spotify_playlist['name']}'")
     return await _fetch_all_from_spotify_in_chunks(lambda offset, session=spotify_session: _get_tracks_from_spotify_playlist(offset=offset, spotify_session=session, playlist_id=spotify_playlist["id"]))
 
 async def get_playlists_from_spotify(spotify_session: spotipy.Spotify):
@@ -96,19 +96,18 @@ async def get_playlists_from_spotify(spotify_session: spotipy.Spotify):
     playlists = []
     username = get_username()
 
-    print("Loading Spotify playlists")
     results = spotify_session.user_playlists(username)
-    print('results', len(results))
     playlists.extend([p for p in results['items']])
-    print('p1', len(playlists))
 
     # get all the remaining playlists in parallel
     if results['next']:
         offsets = [ results['limit'] * n for n in range(1, math.ceil(results['total']/results['limit'])) ]
-        extra_results = await atqdm.gather( *[asyncio.to_thread(spotify_session.user_playlists, username, offset=offset) for offset in offsets ] )
+        extra_results = await atqdm.gather(
+            *[asyncio.to_thread(spotify_session.user_playlists, username, offset=offset) for offset in offsets ],
+            desc=' > Loading Spotify playlists'
+            )
         for extra_result in extra_results:
             playlists.extend([p for p in extra_result['items'] if p['owner']['id'] == username])
-        print('p2', len(playlists))
     return playlists
 
 def get_new_spotify_tracks(spotify_tracks: Sequence[sp_types.SpotifyTrack]) -> List[sp_types.SpotifyTrack]:

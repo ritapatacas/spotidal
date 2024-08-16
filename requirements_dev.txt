@@ -14,5 +14,5 @@ PyYAML==6.0
 spotipy==2.22.1
 tidalapi==0.7.6
 tqdm==4.66.5
+tidal-dl-ng==0.15.6
 
-sqlalchemy==2.0.32

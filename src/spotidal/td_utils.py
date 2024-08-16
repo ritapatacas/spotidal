@@ -3,12 +3,31 @@ import datetime
 import tidalapi
 import utils
 import td_fetch
+import sp_fetch as _sp_fetch
 from typing import Sequence, Mapping
 from tqdm.asyncio import tqdm as atqdm
 import sp_types
 from cache import failure_cache, track_match_cache
 
 
+def save_playlists_to_json(playlists):
+    utils.save_to_json(playlists, 'user_data/tidal_playlists.json')
+    return playlists
+
+async def fetch_playlists(tidal_session: tidalapi.Session):
+    playlists = await get_tidal_playlists_wrapper(tidal_session)
+    result = []
+    for p in playlists:
+        parsed_playlist = playlist_to_dict(p)
+        result.append(parsed_playlist)
+
+    return result
+
+async def fetch_and_save_playlists(tidal_session: tidalapi.Session):
+    playlists = await fetch_playlists(tidal_session)
+
+    save_playlists_to_json(playlists)
+    return playlists
 
 #### from sync on git@github.com:spotify2tidal/spotify_to_tidal.git
 
@@ -63,12 +82,12 @@ async def search_new_tracks_on_tidal(tidal_session: tidalapi.Session, spotify_tr
             [semaphore.release() for i in range(new_items)] # leak new_items from the 'bucket'
 
     # Extract the new tracks that do not already exist in the old tidal tracklist
-    tracks_to_search = get_new_spotify_tracks(spotify_tracks)
+    tracks_to_search = _sp_fetch.get_new_spotify_tracks(spotify_tracks)
     if not tracks_to_search:
         return
 
     # Search for each of the tracks on Tidal concurrently
-    task_description = "Searching Tidal for {}/{} tracks in Spotify playlist '{}'".format(len(tracks_to_search), len(spotify_tracks), playlist_name)
+    task_description = " > Searching Tidal for {}/{} tracks in Spotify playlist '{}'".format(len(tracks_to_search), len(spotify_tracks), playlist_name)
     semaphore = asyncio.Semaphore(config.get('max_concurrency', 10))
     rate_limiter_task = asyncio.create_task(_run_rate_limiter(semaphore))
     search_results = await atqdm.gather( *[ utils.repeat_on_request_error(tidal_search, t, semaphore, tidal_session) for t in tracks_to_search ], desc=task_description )
@@ -80,22 +99,44 @@ async def search_new_tracks_on_tidal(tidal_session: tidalapi.Session, spotify_tr
             track_match_cache.insert( (spotify_track['id'], search_results[idx].id) )
         else:
             color = ('\033[91m', '\033[0m')
-            print(color[0] + f"Could not find track {spotify_track['id']}: {','.join([a['name'] for a in spotify_track['artists']])} - {spotify_track['name']}" + color[1])
+            print(color[0] + f" > Could not find track {spotify_track['id']}: {','.join([a['name'] for a in spotify_track['artists']])} - {spotify_track['name']}" + color[1])
 
 async def get_tidal_playlists_wrapper(tidal_session: tidalapi.Session):
     tidal_playlists = await td_fetch.get_all_playlists(tidal_session.user)
 
     return tidal_playlists
 
-def pick_tidal_playlist_for_spotify_playlist(spotify_playlist, tidal_playlists: Mapping[str, tidalapi.Playlist]):
-    for playlist in tidal_playlists:
-        print('\n\nname ', playlist.name)
-    if spotify_playlist['name'] in tidal_playlists:
-      # if there's an existing tidal playlist with the name of the current playlist then use that
-      tidal_playlist = tidal_playlists[spotify_playlist['name']]
-      print('\n\n>td p - ', tidal_playlist)
-      return (spotify_playlist, tidal_playlist)
-    else:
-      return (spotify_playlist, None)
+def pick_tidal_playlist_for_spotify_playlist(sp_p, td_playlists: Mapping[str, tidalapi.Playlist]):
+    for td_p in td_playlists:
+        if sp_p['name'] == td_p['name']:
+            #print('\ntdp ', td_p.name, td_p.id)
+            #print('dpp ', sp_playlist['name'], sp_playlist['id'])
+            return (sp_p['id'], td_p['id'])
+    return (sp_p['id'], None)
 
 ####
+
+
+def playlist_to_dict(playlist: tidalapi.Playlist):
+        return {
+            "name": playlist.name,
+            "id": playlist.id,
+            "data": {
+                "num_tracks": playlist.num_tracks,
+                "num_videos": playlist.num_videos,
+                "creator": str(playlist.creator) if playlist.creator else None,
+                "description": playlist.description,
+                "duration": playlist.duration,
+                "last_updated": playlist.last_updated.isoformat() if playlist.last_updated else None,
+                "created": playlist.created.isoformat() if playlist.created else None,
+                "type": playlist.type,
+                "public": playlist.public,
+                "popularity": playlist.popularity,
+                "promoted_artists": [str(artist) for artist in playlist.promoted_artists] if playlist.promoted_artists else None,
+                "last_item_added_at": playlist.last_item_added_at.isoformat() if playlist.last_item_added_at else None,
+                "picture": playlist.picture,
+                "square_picture": playlist.square_picture,
+                "user_date_added": playlist.user_date_added.isoformat() if playlist.user_date_added else None,
+                "_etag": playlist._etag
+            }
+        }

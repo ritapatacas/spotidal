@@ -3,8 +3,8 @@ import sys
 import asyncio
 import utils
 import auth as _auth
-import sp_fetch as _sp_fetch
-import td_fetch as _td_fetch
+import sp_utils as _sp_utils
+import td_utils as _td_utils
 import parse_sp_td as _parse_sp_td
 sessions = None
 sp = None
@@ -17,10 +17,8 @@ async def main():
     sp = sessions['sp']
     td = sessions['td']
 
-    mapping = await _parse_sp_td.get_user_playlist_mappings(sp, td)
-"""
-    for m in mapping:
-        print(json.dumps(m, indent=4)) """
+    await _parse_sp_td.fetch_and_map_playlists(sp, td)
+    await _parse_sp_td.sync_from_map(sp, td)
 
 
 if __name__ == '__main__':

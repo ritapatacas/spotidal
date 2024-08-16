@@ -6,23 +6,24 @@ import spotipy
 import td_fetch as _td_fetch
 import sp_fetch as _sp_fetch
 import td_utils as _td_utils
+import sp_utils as _sp_utils
 from cache import track_match_cache
 from tqdm import tqdm
 
 
-async def fetch_playlists(sessions):
+async def fetch_playlists(
+        sp: spotipy.Spotify,
+        td: tidalapi.Session):
     playlists = {
-        'sp': _sp_fetch.get_playlists_names_ids(sessions['sp']),
-        'td': await _td_fetch.get_playlists_names_ids(sessions['td'])
+        'sp': await _sp_utils.fetch_playlists(sessions['sp']),
+        'td': await _td_utils.fetch_playlists(sessions['td'])
     }
     return playlists
 
 async def save_playlists_to_json(playlists):
     print("\n\n> Saving playlists to json")
-    utils.save_to_json(playlists['sp'], 'user_data/spotify_playlists.json')
-    utils.save_to_json(playlists['td'], 'user_data/tidal_playlists.json')
-
-    # matches = await find_matching_playlists(sp_playlists, td_playlists)
+    _sp_utils.save_playlists_to_json(playlists['sp'])
+    _td_utils.save_playlists_to_json(playlists['td'])
 
 def load_playlists_from_json():
     playlists = {
@@ -31,9 +32,12 @@ def load_playlists_from_json():
     }
     return playlists
 
-async def fetch_and_save_playlists(sessions):
-    playlists = await fetch_playlists(sessions)
-    await save_playlists_to_json(playlists)
+async def fetch_and_save_playlists(
+        sp: spotipy.Spotify,
+        td: tidalapi.Session):
+    sp_playlists = await _sp_utils.fetch_and_save_playlists(sp)
+    td_playlists = await _td_utils.fetch_and_save_playlists(td)
+    return {'sp': sp_playlists, 'td': td_playlists}
 
 async def find_matching_playlists(playlists):
     matches = []
@@ -55,25 +59,101 @@ async def find_matching_playlists(playlists):
     return matches
 
 
+async def fetch_and_map_playlists(
+        sp: spotipy.Spotify,
+        td: tidalapi.Session):
+    playlists = await fetch_and_save_playlists(sp, td)
+    map_playlists(playlists)
+
+    return playlists
+
+def map_playlists(playlists):
+    results = []
+    sp_playlists = playlists['sp']
+    td_playlists = playlists['td']
+
+    print('\n> Mapping playlists...')
+
+    for sp_p in sp_playlists:
+        pair = _td_utils.pick_tidal_playlist_for_spotify_playlist(sp_p, td_playlists)
+        results.append({
+            'name': sp_p['name'],
+            'sync': 'true',
+            'sp': pair[0],
+            'td': pair[1]
+            })
+    utils.save_to_json(results, 'user_data/playlists_map.json')
+    return results
 
 
+async def sync_from_map(sp: spotipy.Spotify, td: tidalapi.Session):
+    print(f"\n> Syncing playlists...")
+    map = utils.load_from_json('user_data/playlists_map.json')
+    for playlist in map:
+        if playlist['sync'] == 'true':
+            await sync_a_playlist(sp, td, playlist['sp'], playlist['td'])
+
+
+async def sync_a_playlist(
+        sp: spotipy.Spotify,
+        td: tidalapi.Session,
+        sp_p,
+        td_p):
+
+    sp_playlist = sp.playlist(sp_p)
+    print(f"\n > Syncing playlist {sp_playlist['name']}...")
+
+    if not td_p:
+        print(f" > No playlist found on Tidal corresponding to Spotify playlist: '{sp_playlist['name']}', creating new playlist...")
+        td_playlist =  td.user.create_playlist(sp_playlist['name'], sp_playlist['description'])
+    else:
+        td_playlist = td.playlist(td_p)
+    config = utils.get_conf()
+
+
+    # Extract the new tracks from the playlist that we haven't already seen before
+    spotify_tracks = await _sp_fetch.get_tracks_from_spotify_playlist(sp, sp_playlist)
+    old_tidal_tracks = await _td_fetch.get_all_playlist_tracks(td_playlist)
+
+    utils.populate_track_match_cache(spotify_tracks, old_tidal_tracks)
+
+    await _td_utils.search_new_tracks_on_tidal(td, spotify_tracks, sp_playlist['name'], config)
+    new_tidal_track_ids = _sp_fetch.get_tracks_for_new_tidal_playlist(spotify_tracks)
+    # Update the Tidal playlist if there are changes
+    old_tidal_track_ids = [t.id for t in old_tidal_tracks]
+    if new_tidal_track_ids == old_tidal_track_ids:
+        print(" > No changes to write to Tidal playlist")
+    elif new_tidal_track_ids[:len(old_tidal_track_ids)] == old_tidal_track_ids:
+        # Append new tracks to the existing playlist if possible
+        _td_fetch.add_multiple_tracks_to_playlist(td_playlist, new_tidal_track_ids[len(old_tidal_track_ids):])
+    else:
+        # Erase old playlist and add new tracks from scratch if any reordering occured
+        _td_fetch.clear_tidal_playlist(td_playlist)
+        _td_fetch.add_multiple_tracks_to_playlist(td_playlist, new_tidal_track_ids)
 
 
 #### from sync on git@github.com:spotify2tidal/spotify_to_tidal.git
-async def get_user_playlist_mappings(spotify_session: spotipy.Spotify, tidal_session: tidalapi.Session):
+async def get_user_playlist_mappings(
+        sp: spotipy.Spotify,
+        td: tidalapi.Session):
     results = []
-    spotify_playlists = await _sp_fetch.get_playlists_from_spotify(spotify_session)
-    tidal_playlists = await _td_utils.get_tidal_playlists_wrapper(tidal_session)
-    for playlist in tidal_playlists:
-        print('\n\nname ', playlist.name)
+    spotify_playlists = await _sp_fetch.get_playlists_from_spotify(sp)
+    tidal_playlists = await _td_utils.get_tidal_playlists_wrapper(td)
 
-    for spotify_playlist in spotify_playlists:
-        td_playlist = _td_utils.pick_tidal_playlist_for_spotify_playlist(spotify_playlist, tidal_playlists)
-        results.append(td_playlist)
-        #print('\n\n td name is', td_playlist)
+    for sp_playlist in spotify_playlists:
+        pair = _td_utils.pick_tidal_playlist_for_spotify_playlist(sp_playlist, tidal_playlists)
+        results.append({
+            'playlist': sp_playlist['name'],
+            'sync': 'true',
+            'sp': pair[0],
+            'td': pair[1]
+            })
+    utils.save_to_json(results, 'user_data/playlists_map.json')
     return results
 
-async def sync_playlist(spotify_session: spotipy.Spotify, tidal_session: tidalapi.Session, spotify_playlist, tidal_playlist: tidalapi.Playlist | None, config: dict):
+async def sync_playlist(spotify_session: spotipy.Spotify, tidal_session: tidalapi.Session, spotify_playlist, tidal_playlist: tidalapi.Playlist | None):
+    config = utils.get_conf()
+
     """ sync given playlist to tidal """
     # Create a new Tidal playlist if required
     if not tidal_playlist:
@@ -124,7 +204,7 @@ async def sync_favorites(spotify_session: spotipy.Spotify, tidal_session: tidala
     await _td_utils.search_new_tracks_on_tidal(tidal_session, spotify_tracks, "Favorites", config)
     new_tidal_favorite_ids = get_new_tidal_favorites()
     if new_tidal_favorite_ids:
-        for tidal_id in tqdm(new_tidal_favorite_ids, desc="Adding new tracks to Tidal favorites"):
+        for tidal_id in tqdm(new_tidal_favorite_ids, desc=" > Adding new tracks to Tidal favorites"):
             tidal_session.user.favorites.add_track(tidal_id)
     else:
         print("No new tracks to add to Tidal favorites")
