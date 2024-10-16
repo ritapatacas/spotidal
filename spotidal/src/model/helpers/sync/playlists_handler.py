@@ -1,10 +1,10 @@
 import asyncio
-from typing import Callable, List, Mapping
 import math
 import spotipy
 import tidalapi
-from tqdm.asyncio import tqdm as atqdm
 import math
+from typing import Callable, List, Mapping
+from tqdm.asyncio import tqdm as atqdm
 from spotidal.src.model.helpers.tidalapi import get_all_playlists
 from spotidal.src.view.text import Text as t
 import spotidal.src.model.helpers.sync.search as _search

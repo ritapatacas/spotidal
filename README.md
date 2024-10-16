@@ -26,6 +26,11 @@ But did I enjoy building it? :)
 - [ ] Make TIDAL tracks persist across syncs  
 - [ ] Fully integrate TIDAL playlist track downloads
 
+
+## Usage
+
+See [Setup Spotify Credentials](spotify-config.md) to check how to get your credentials.
+
 ### Credits  
 This project began as a fork of [spotify_to_tidal](https://github.com/spotify2tidal), combined with the [python-tidal algorithm](https://github.com/tamland/python-tidal).  
 It was built for personal use and learning purposes. There is an automation feature that uses [tidal-media-downloader](https://github.com/yaronzz/Tidal-Media-Downloader).  

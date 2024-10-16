@@ -6,7 +6,7 @@ from spotidal.src.model.helpers.type.file import Files
 class Sync:
     def __init__(self, sessions):
         self.sessions = sessions
-        self.sp_credentials = Files.SP_SESSION.load()["spotify"]
+        self.sp_credentials = Files.CREDENTIALS.load()["spotify"]
 
 
     def _sync_playlist(self, sp_id):

@@ -1,9 +1,9 @@
-from typing import List, Sequence
 import tidalapi
+from typing import List, Sequence
+import spotidal.src.model.helpers.sync.match as _match
 from spotidal.src.model.helpers.cache import failure_cache, track_match_cache
 from spotidal.src.model.helpers.type import spotify as t_spotify
 from spotidal.src.view.text import Text as txt
-import spotidal.src.model.helpers.sync.match as _match
 
 
 def populate_track_match_cache(

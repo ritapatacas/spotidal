@@ -1,0 +1,4 @@
+include README.md
+include requirements.txt
+include default_config.json
+include example_credentials.yml

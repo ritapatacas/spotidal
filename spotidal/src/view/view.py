@@ -12,8 +12,6 @@ from spotidal.src.view.prompt import (
     SaveSelectionMenu
 )
 
-
-print("\n\nSpotidal2u\n")
 app = Controller()
 current_selection = []
 
@@ -64,52 +62,57 @@ def by_id_menu():
     print(t.display_selection(current_selection))
 
 
-
 """         if confirm("Add more or proceed with selection?"):
             for p in app.get_current_selection():
                 action(p)
             app.clear_current_selection()
             break """
+def run():
+    global current_selection
+    while True:
+        if len(current_selection) > 0:
+            print(t.display_selection(current_selection))
 
-while True:
-    if current_selection.__len__() > 0:
-        print(t.display_selection(current_selection))
+        menu = main_menu()
 
-    menu = main_menu()
+        try:
+            if menu == MainMenu.SETTINGS[0]:
+                action = settings_menu()
+                if action == SettingsMenu.RESET_SETTINGS[0]:
+                    app.reset_settings()
 
-    try:
-        if menu == MainMenu.SETTINGS[0]:
-            action = settings_menu()
-            if action == SettingsMenu.RESET_SETTINGS[0]:
-                app.reset_settings()
+            elif menu == MainMenu.SAVE_SELECTION[0]:
+                save_menu()
 
-        elif menu == MainMenu.SAVE_SELECTION[0]:
-            save_menu()
+            elif menu == MainMenu.SYNC[0] or menu == MainMenu.DOWNLOAD[0]:
+                action = selection_mode_menu()
 
-        elif menu == MainMenu.SYNC[0] or menu == MainMenu.DOWNLOAD[0]:
-            action = selection_mode_menu()
+                if action == SelectionModeMenu.SEARCH[0]:
+                    search_menu()
 
-            if action == SelectionModeMenu.SEARCH[0]:
-                search_menu()
+                elif action == SelectionModeMenu.SELECT[0]:
+                    select_menu()
 
-            elif action == SelectionModeMenu.SELECT[0]:
-                select_menu()
+                elif action == SelectionModeMenu.BY_ID[0]:
+                    by_id_menu()
 
-            elif action == SelectionModeMenu.BY_ID[0]:
-                by_id_menu()
+                elif action == SelectionModeMenu.LOAD[0]:
+                    current_selection = app.load_saved_selection()
 
-            elif action == SelectionModeMenu.LOAD[0]:
-                current_selection = app.load_saved_selection()
+                if menu == MainMenu.SYNC[0]:
+                    app.sync(current_selection)
+                elif menu == MainMenu.DOWNLOAD[0]:
+                    app.download(current_selection)
 
-            if menu == MainMenu.SYNC[0]:
-                app.sync(current_selection)
-            elif menu == MainMenu.DOWNLOAD[0]:
-                app.download(current_selection)
-
-    except KeyboardInterrupt:
-        print(t.log("quitting!"))
-        sys.exit()
+        except KeyboardInterrupt:
+            print(t.log("quitting!"))
+            sys.exit()
 
 
 def main():
-    pass
+    print("\n\nSpotidal2u\n")
+    run()
+
+
+if __name__ == "__main__":
+    main()

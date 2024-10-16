@@ -1,6 +1,5 @@
 import sys
 import subprocess
-import spotidal.src.model.helpers.utils as utils
 from spotidal.src.model.helpers.type.file import Files
 
 

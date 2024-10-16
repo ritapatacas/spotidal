@@ -1,7 +1,7 @@
 import spotidal.src.model.helpers.utils as utils
-from spotidal.src.view.text import Text as t
 import spotidal.src.model.helpers.synchronizer as sync
 import spotidal.src.model.auth as auth
+from spotidal.src.view.text import Text as t
 from spotidal.src.model.helpers.type.file import Files
 
 
@@ -13,8 +13,7 @@ class Model:
         self.current_selection = []
         self.playlist_selection = []
         self.saved_selection = Files.SELECTION.load()
-        #self.init()
-
+        
     def init(self):
         self.get_user_playlists()
         self.get_playlist_names()

@@ -22,8 +22,7 @@ class Files(Enum):
     PARSED_PLAYLISTS = Path.USR, 'parsed_playlists', Ext.YML
     SELECTION = Path.USR, 'selection', Ext.JSON
     NOT_FOUND = Path.USR, 'not_found', Ext.TXT
-    TD_SESSION = Path.USR, 'session', Ext.YML
-    SP_SESSION = Path.USR, 'config', Ext.YML
+    CREDENTIALS = Path.USR, "credentials", Ext.YML
 
     def save(self, data):
         file_path = self.resolver(self)

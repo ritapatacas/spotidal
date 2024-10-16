@@ -1,6 +1,8 @@
 .vscode/
 env/
+venv/
 usr/
 .cache*
 **/__pycache__/*
 spotidal/src/arch/*
+spotidal.egg-info

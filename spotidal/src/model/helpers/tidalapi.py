@@ -1,7 +1,7 @@
 import asyncio
 import math
-from typing import List
 import tidalapi
+from typing import List
 from tqdm import tqdm
 from tqdm.asyncio import tqdm as atqdm
 from spotidal.src.view.text import Text as t

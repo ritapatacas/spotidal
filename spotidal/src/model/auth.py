@@ -5,20 +5,18 @@ import webbrowser
 import spotidal.src.model.helpers.utils as utils
 from spotidal.src.model.helpers.type.file import Files
 from spotidal.src.view.text import Text as t
-
-
+from spotidal.src.view.setup import get_credentials
 __all__ = ["open_sp_session", "open_td_session"]
 
 SPOTIFY_SCOPES = "playlist-read-private, user-library-read"
 
 
 def open_sp_session() -> sp_api.Spotify:
-    credentials = Files.SP_SESSION.load()["spotify"]
-    scope = "user-library-read playlist-read-private user-follow-read playlist-modify-private playlist-modify-public"
+    credentials = Files.CREDENTIALS.load()["spotify"]
 
     auth = sp_api.SpotifyOAuth(
         username=credentials["username"],
-        scope=scope,
+        scope=credentials["scope"],
         client_id=credentials["client_id"],
         client_secret=credentials["client_secret"],
         redirect_uri=credentials["redirect_uri"],
@@ -41,19 +39,23 @@ def open_td_session() -> td_api.Session:
         url = "https://" + url
     webbrowser.open(url)
     future.result()
-    Files.TD_SESSION.save(
+    Files.CREDENTIALS.save(
         {
-            "session_id": session.session_id,
-            "token_type": session.token_type,
-            "access_token": session.access_token,
-            "refresh_token": session.refresh_token,
+            "spotify": Files.CREDENTIALS.load()["spotify"],
+            "tidal": {
+                "session_id": session.session_id,
+                "token_type": session.token_type,
+                "access_token": session.access_token,
+                "refresh_token": session.refresh_token,
+            },
         }
     )
 
     return session
 
+
 def get_td_session() -> td_api.Session:
-    previous_session = Files.TD_SESSION.load()
+    previous_session = Files.CREDENTIALS.load()["tidal"]
 
     session = td_api.Session()
     if previous_session:
@@ -69,3 +71,30 @@ def get_td_session() -> td_api.Session:
     else:
         print(t.error("no previous tidal session found, opening new session"))
         open_td_session()
+
+def open_sessions():
+    try:
+        sp = open_sp_session()
+    except Exception as e:
+        print(t.error(f"error opening spotify session: {str(e)}"))
+        credentials = get_credentials()
+        Files.CREDENTIALS.save(
+            {
+                "spotify": {
+                    "username": credentials["username"],
+                    "client_id": credentials["client_id"],
+                    "client_secret": credentials["client_secret"],
+                    "redirect_uri": "http://localhost:8080",
+                    "scope": "user-library-read playlist-read-private user-follow-read playlist-modify-private playlist-modify-public",
+                    # increase these parameters to increase the search speed, while decreasing reduces likelihood of 429 errors
+                    "max_concurrency": 10, # max concurrent connections at any given time
+                    "rate_limit":      10, # max sustained connections per second
+                }
+            }
+            )
+    try:
+        td = get_td_session()
+    except Exception as e:
+        print(t.error(f"error opening tidal session: {str(e)}"))
+
+    return sp, td
