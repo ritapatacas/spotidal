@@ -1,0 +1,20 @@
+{
+  "skip_existing": "False",
+  "lyrics_embed": false,
+  "lyrics_file": false,
+  "video_download": true,
+  "download_delay": true,
+  "download_base_path": "~/Spotidal2U",
+  "quality_audio": "HIGH",
+  "quality_video": "480",
+  "format_album": "{album_artist}/{album_title}{album_explicit}/{album_track_num} {artist_name} - {track_title}",
+  "format_playlist": "{playlist_name} (playlist)/{artist_name} - {track_title}",
+  "format_mix": "Mix/{mix_name}/{artist_name} - {track_title}",
+  "format_track": "Tracks/{artist_name} - {track_title}{track_explicit}",
+  "format_video": "{artist_name}/{artist_name} - {track_title}{track_explicit}",
+  "video_convert_mp4": true,
+  "path_binary_ffmpeg": "",
+  "metadata_cover_dimension": "320",
+  "extract_flac": true,
+  "downgrade_on_hi_res": false
+}
