@@ -1,7 +1,6 @@
 import re
 from enum import Enum
-from spotidal.src.model.helpers.utils import get_parsed_playlists
-
+from ..utils import get_parsed_playlists
 
 
 class PlaylistReference(Enum):

@@ -1,6 +1,7 @@
 import sys
 import subprocess
-from spotidal.src.model.helpers.type.file import Files
+from ..helpers.type.file import Files
+from ...view.text import Text as t
 
 
 def check_and_install_tidal_dl():
@@ -33,6 +34,8 @@ def check_login():
 
 def download_playlist(playlist_id, timeout=240):
     check_and_install_tidal_dl()
+
+    print(t.log("downloading, please don't close the terminal..."))
 
     # todo check how many tracks the playlist has
 

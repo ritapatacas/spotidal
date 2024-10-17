@@ -1,0 +1,38 @@
+[tool.poetry]
+name = "spotidal"
+version = "0.2.0"
+description = "sync and download spotify and tidal playlists"
+authors = ["Your Name <you@example.com>"]
+license = "MIT License"
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = "^3.11"
+certifi = "2024.8.30"
+charset-normalizer = "3.4.0"
+colorama = "0.4.6"
+greenlet = "3.1.1"
+idna = "3.10"
+inquirerpy = "0.3.4"
+isodate = "0.7.2"
+mpegdash = "0.4.0"
+pfzy = "0.3.4"
+prompt-toolkit = "3.0.48"
+python-dateutil = "2.9.0.post0"
+pyyaml = "6.0.2"
+ratelimit = "2.2.1"
+redis = "5.1.1"
+requests = "2.32.3"
+six = "1.16.0"
+spotipy = "2.24.0"
+sqlalchemy = "2.0.36"
+tidalapi = "0.8.0"
+tqdm = "4.66.5"
+typing-extensions = "4.12.2"
+urllib3 = "2.2.3"
+wcwidth = "0.2.13"
+
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"

@@ -1,25 +1,24 @@
 from .config import SpotifyConfig, TidalConfig, PlaylistConfig, SyncConfig
 from .spotify import SpotifyTrack
-
-from spotipy import Spotify
-from tidalapi import Session, Track
+from .playlist_ref import PlaylistReference
 
 TidalID = str
 SpotifyID = str
+
+from tidalapi import Session, Track
+
 TidalSession = Session
 TidalTrack = Track
-SpotifySession = Spotify
 
 __all__ = [
     "SpotifyConfig",
     "TidalConfig",
     "PlaylistConfig",
     "SyncConfig",
-    "TidalPlaylist",
     "TidalID",
     "SpotifyID",
-    "SpotifySession",
     "TidalSession",
     "TidalTrack",
     "SpotifyTrack",
+    "PlaylistReference",
 ]

@@ -63,13 +63,14 @@ class MenuBase:
 class MainMenu(MenuBase):
     MAIN_Q = "What do you want to do?"
     MAIN = "main", Prompt.LIST
+
     SYNC = "sync", Prompt.LIST
     DOWNLOAD = "download", Prompt.LIST
     SETTINGS = "settings", Prompt.LIST
-    LOAD = "load saved selection", Prompt.LIST
+    LOAD = "load selection", Prompt.LIST
     SAVE_SELECTION = "save selection", Prompt.CONFIRM
 
-    MAIN_OPT = [SYNC, DOWNLOAD, SETTINGS, SAVE_SELECTION]
+    MAIN_OPT = [SYNC, DOWNLOAD, LOAD, SAVE_SELECTION, SETTINGS]
 
     def __init__(self):
         super().__init__(Prompt.LIST)
@@ -219,6 +220,38 @@ class ByIdMenu(MenuBase):
         response = prompt(questions)
         return response["playlist_id"]
 
+class ConfirmMenu(MenuBase):
+    def __init__(self):
+        super().__init__(Prompt.CONFIRM)
+
+    def display(self, message: str):
+        questions = [
+            {
+                "type": "confirm",
+                "name": "confirm",
+                "message": message,
+                "default": True,
+                "keybindings": {
+                    "confirm": [
+                        {"key": "y"},
+                        {"key": "Y"},
+                        {"key": "p"},
+                        {"key": "P"},
+                        {"key": "1"},
+                    ],
+                    "reject": [
+                        {"key": "n"},
+                        {"key": "N"},
+                        {"key": "a"},
+                        {"key": "A"},
+                        {"key": "0"},
+                    ],
+                },
+            }
+        ]
+        response = prompt(questions)
+        return response["confirm"]
+
 
 ID_Q = "Spotify playlist ID to sync"
 ID_ERR = "invalid Spotify playlist ID"
@@ -233,13 +266,14 @@ QUIT_LOG = "quitting!"
 MAIN = "main", Prompt.LIST
 SYNC = "sync", Prompt.LIST
 DOWNLOAD = "download", Prompt.LIST
+LOAD = "load saved selection"
+SAVE = "save selection", Prompt.CONFIRM
 SETTINGS = "settings", Prompt.LIST
-MAIN_OPT = [SYNC, DOWNLOAD, SETTINGS]
+MAIN_OPT = [SYNC, DOWNLOAD, LOAD, SAVE, SETTINGS]
 
 SEARCH = "search", Prompt.SEARCH
 SELECT = "select", Prompt.LIST
 BY_ID = "by_id", Prompt.INPUT
-LOAD = "load saved selection"
 SELECTION_OPT = [SEARCH, SELECT, BY_ID, LOAD]
 
 RESET_SETTINGS = "reset settings"

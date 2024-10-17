@@ -1,9 +1,9 @@
-from spotidal.src.model.model import Model
-from spotidal.src.model.helpers.type.playlist_ref import PlaylistReference as playlist
-from spotidal.src.model.helpers.actions.settings import Settings
-from spotidal.src.model.helpers.actions.sync import Sync
-from spotidal.src.model.helpers.actions.download import Download
+from ..model import Model
+from ..model.helpers.type import PlaylistReference as playlist
 
+from ..model.settings import Settings
+from ..model.sync import Sync
+from ..model.download import Download
 
 class Controller:
     def __init__(self):
@@ -23,8 +23,20 @@ class Controller:
     def load_saved_selection(self):
         return self._model.get_saved_selection()
 
+
     def save_current_selection(self, selected_playlists):
         self._model.save_selection(selected_playlists)
+
+
+    def get_current_selection(self):
+        return self._model.get_current_selection()
+
+    def add_to_current_selection(self, e):
+        self.current_selection.add(e)
+
+    def get_saved_selection(self):
+        return self.get_saved_selection()
+
 
     def sync(self, e):
         if isinstance(e, list):

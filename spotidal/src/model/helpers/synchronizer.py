@@ -3,19 +3,25 @@ from typing import List
 import spotipy
 import tidalapi
 from tqdm import tqdm
-from spotidal.src.model.helpers.cache import track_match_cache
-from spotidal.src.model.helpers.tidalapi import (
+
+from .cache import track_match_cache
+from .tidalapi import (
     add_multiple_tracks_to_playlist,
     clear_td_playlist,
     get_all_favorites,
     get_all_playlist_tracks,
 )
-from spotidal.src.view.text import Text as t
-import spotidal.src.model.helpers.sync.match as _match
-import spotidal.src.model.helpers.sync.search as _search
-import spotidal.src.model.helpers.sync.cache as _cache
-import spotidal.src.model.helpers.sync.request_utils as _req
-import spotidal.src.model.helpers.sync.playlists_handler as _playlists
+
+from ...view.text import Text as t
+
+from .sync.match import match as _match
+from .sync.search import search_new_tracks_on_td
+from .sync.cache import (
+    populate_track_match_cache,
+    get_tracks_for_new_td_playlist
+)
+from .sync.request_utils import repeat_on_request_error
+from .sync.playlists_handler import get_tracks_from_sp_playlist
 
 
 async def sync_playlist(
@@ -25,7 +31,7 @@ async def sync_playlist(
     td_playlist: tidalapi.Playlist | None,
     config: dict,
 ):
-    sp_tracks = await _playlists.get_tracks_from_sp_playlist(
+    sp_tracks = await get_tracks_from_sp_playlist(
         sp_session, sp_playlist
     )
     if len(sp_tracks) == 0:
@@ -42,11 +48,11 @@ async def sync_playlist(
         old_td_tracks = []
 
     # extract the new tracks we haven't already seen
-    _cache.populate_track_match_cache(sp_tracks, old_td_tracks)
-    await _search.search_new_tracks_on_td(
+    populate_track_match_cache(sp_tracks, old_td_tracks)
+    await search_new_tracks_on_td(
         td_session, sp_tracks, sp_playlist["name"], config
     )
-    new_td_track_ids = _cache.get_tracks_for_new_td_playlist(sp_tracks)
+    new_td_track_ids = get_tracks_for_new_td_playlist(sp_tracks)
 
     # update the tidal playlist if there are changes
     old_td_track_ids = [t.id for t in old_td_tracks]
@@ -69,7 +75,7 @@ async def sync_favorites(
         _get_fav_tracks = lambda offset: sp_session.current_user_saved_tracks(
             offset=offset
         )
-        tracks = await _req.repeat_on_request_error(
+        tracks = await repeat_on_request_error(
             _playlists._fetch_all_from_sp_in_chunks, _get_fav_tracks
         )
         tracks.reverse()
@@ -91,7 +97,7 @@ async def sync_favorites(
         td_session.user.favorites, order="DATE"
     )
     _match.populate_track_match_cache(sp_tracks, old_td_tracks)
-    await _search.search_new_tracks_on_td(
+    await search_new_tracks_on_td(
         td_session, sp_tracks, "Favorites", config
     )
     new_tidal_favorite_ids = get_new_td_favorites()

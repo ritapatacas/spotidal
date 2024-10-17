@@ -1,9 +1,10 @@
 import tidalapi
 from typing import List, Sequence
-import spotidal.src.model.helpers.sync.match as _match
-from spotidal.src.model.helpers.cache import failure_cache, track_match_cache
-from spotidal.src.model.helpers.type import spotify as t_spotify
-from spotidal.src.view.text import Text as txt
+
+from ..cache import failure_cache, track_match_cache
+from ..type import spotify as t_spotify
+from .match import match
+from ....view import Text as txt
 
 
 def populate_track_match_cache(
@@ -14,14 +15,14 @@ def populate_track_match_cache(
 
     def _populate_one_track_from_sp(spotify_track: t_spotify.SpotifyTrack):
         for idx, td_track in list(enumerate(td_tracks)):
-            if td_track.available and _match.match(td_track, spotify_track):
+            if td_track.available and match(td_track, spotify_track):
                 track_match_cache.insert((spotify_track["id"], td_track.id))
                 td_tracks.pop(idx)
                 return
 
     def _populate_one_track_from_td(td_track: tidalapi.Track):
         for idx, spotify_track in list(enumerate(sp_tracks)):
-            if td_track.available and _match.match(td_track, spotify_track):
+            if td_track.available and match(td_track, spotify_track):
                 track_match_cache.insert((spotify_track["id"], td_track.id))
                 sp_tracks.pop(idx)
                 return

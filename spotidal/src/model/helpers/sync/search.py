@@ -3,15 +3,15 @@ import datetime
 from typing import Sequence, Mapping
 import tidalapi
 from tqdm.asyncio import tqdm as atqdm
-from spotidal.src.model.helpers.cache import failure_cache, track_match_cache
-from spotidal.src.model.helpers.type import spotify as t_spotify
-from spotidal.src.view.text import Text as t
-from spotidal.src.model.helpers.type.file import Files
-import spotidal.src.model.helpers.sync.match as _match
-import spotidal.src.model.helpers.sync.cache as _cache
-import spotidal.src.model.helpers.sync.request_utils as _req
-import spotidal.src.model.helpers.sync.search as _search
 
+from ..cache import failure_cache, track_match_cache
+from ..type import spotify as t_spotify
+from ..type.file import Files
+from ....view.text import Text as t
+
+from ..sync import match as _match
+from . import cache as _cache
+from . import request_utils as _req
 
 async def td_search(
     sp_track, rate_limiter, td_session: tidalapi.Session
@@ -109,7 +109,7 @@ async def search_new_tracks_on_td(
     search_results = await atqdm.gather(
         *[
             _req.repeat_on_request_error(
-                _search.td_search, t, semaphore, td_session
+                td_search, t, semaphore, td_session
             )
             for t in tracks_to_search
         ],

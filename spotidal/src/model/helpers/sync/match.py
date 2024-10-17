@@ -2,7 +2,7 @@ from difflib import SequenceMatcher
 from typing import Sequence, Set
 import tidalapi
 import unicodedata
-from spotidal.src.model.helpers.type import spotify as t_spotify
+from ..type import spotify as t_spotify
 
 
 def normalize(s) -> str:

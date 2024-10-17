@@ -1,4 +1,4 @@
-from spotidal.src.model.helpers.type.file import Files
+from ..helpers.type.file import Files
 from spotidal.src.view.text import Text as t
 
 

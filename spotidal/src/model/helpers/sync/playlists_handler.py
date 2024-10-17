@@ -2,13 +2,12 @@ import asyncio
 import math
 import spotipy
 import tidalapi
-import math
 from typing import Callable, List, Mapping
 from tqdm.asyncio import tqdm as atqdm
-from spotidal.src.model.helpers.tidalapi import get_all_playlists
-from spotidal.src.view.text import Text as t
-import spotidal.src.model.helpers.sync.search as _search
-import spotidal.src.model.helpers.sync.request_utils as _req
+from ..tidalapi import get_all_playlists
+from ....view.text import Text as t
+from .search import pick_td_playlist_for_sp_playlist
+from .request_utils import repeat_on_request_error
 
 
 def get_td_playlists_wrapper(
@@ -30,7 +29,7 @@ def get_user_playlist_mappings(
     tidal_playlists = get_td_playlists_wrapper(td_session)
     for spotify_playlist in spotify_playlists:
         results.append(
-            _search.pick_td_playlist_for_sp_playlist(
+            pick_td_playlist_for_sp_playlist(
                 spotify_playlist, tidal_playlists
             )
         )
@@ -109,7 +108,7 @@ async def get_tracks_from_sp_playlist(
         )
 
     print(t.busy(f"loading tracks from spotify playlist '{sp_playlist['name']}'"))
-    items = await _req.repeat_on_request_error(
+    items = await repeat_on_request_error(
         _fetch_all_from_sp_in_chunks,
         lambda offset: _get_tracks_from_sp_playlist(
             offset=offset, playlist_id=sp_playlist["id"]

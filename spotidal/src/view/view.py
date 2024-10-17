@@ -1,5 +1,6 @@
 import sys
 from InquirerPy import prompt
+
 from spotidal.src.controller.controller import Controller
 from spotidal.src.view.text import Text as t
 from spotidal.src.view.prompt import (
@@ -9,11 +10,21 @@ from spotidal.src.view.prompt import (
     SearchMenu,
     SelectMenu,
     ByIdMenu,
-    SaveSelectionMenu
+    SaveSelectionMenu,
+    ConfirmMenu,
 )
 
 app = Controller()
-current_selection = []
+current_selection = set()
+
+def get_remaining_playlists():
+    playlists = set(app.get_playlist_names())
+    remaining_playlists = playlists - current_selection 
+    return list(remaining_playlists)
+
+def clear_selection():
+    global current_selection
+    current_selection = set()
 
 def main_menu():
     main_menu = MainMenu()
@@ -25,6 +36,12 @@ def settings_menu():
     action = settings_menu.display()
     return action
 
+def confirm_selection_menu():
+    confirm_menu = ConfirmMenu()
+    response = confirm_menu.display(
+        "Proceed with selection or add more playlists? (y to proceed, n to add more)"
+    )
+    return response
 
 def selection_mode_menu():
     selection_mode_menu = SelectionModeMenu()
@@ -32,41 +49,34 @@ def selection_mode_menu():
     return action
 
 def search_menu():
-    search_menu = SearchMenu()
-    result = search_menu.display(app.get_playlist_names())
-    current_selection.append(result)
-    print(t.display_selection(current_selection))
+    while True:
+        search_menu = SearchMenu()
+        result = search_menu.display(get_remaining_playlists())
+        current_selection.add(result)
+        print(t.display_selection(current_selection))
+        if confirm_selection_menu():
+            break  # Proceed with selection if confirmed
 
 def save_menu():
     save_menu = SaveSelectionMenu()
     confirm = save_menu.display()
-    print('\n\n result confirm ')
-    print(confirm)
-
     if confirm:
         app.save_current_selection(current_selection)
         print(t.log("selection saved"))
 
-
 def select_menu():
     select_menu = SelectMenu()
-    result = select_menu.display(app.get_playlist_names())
+    result = select_menu.display(get_remaining_playlists())
     for r in result:
-        current_selection.append(r)
+        current_selection.add(r)
     print(t.display_selection(current_selection))
 
 def by_id_menu():
     by_id_menu = ByIdMenu()
-    result = by_id_menu.display()
-    current_selection.append(app.get_playlist_name(str(result)))
+    result = by_id_menu.display(get_remaining_playlists())
+    current_selection.add(app.get_playlist_name(str(result)))
     print(t.display_selection(current_selection))
 
-
-"""         if confirm("Add more or proceed with selection?"):
-            for p in app.get_current_selection():
-                action(p)
-            app.clear_current_selection()
-            break """
 def run():
     global current_selection
     while True:
@@ -80,6 +90,9 @@ def run():
                 action = settings_menu()
                 if action == SettingsMenu.RESET_SETTINGS[0]:
                     app.reset_settings()
+
+            elif menu == MainMenu.LOAD[0]:
+                current_selection = set(app.load_saved_selection())
 
             elif menu == MainMenu.SAVE_SELECTION[0]:
                 save_menu()
@@ -97,22 +110,21 @@ def run():
                     by_id_menu()
 
                 elif action == SelectionModeMenu.LOAD[0]:
-                    current_selection = app.load_saved_selection()
+                    current_selection = set(app.load_saved_selection())
 
                 if menu == MainMenu.SYNC[0]:
-                    app.sync(current_selection)
+                    app.sync(list(current_selection))
                 elif menu == MainMenu.DOWNLOAD[0]:
-                    app.download(current_selection)
+                    app.download(list(current_selection))
+                    clear_selection()
 
         except KeyboardInterrupt:
             print(t.log("quitting!"))
             sys.exit()
 
-
 def main():
-    print("\n\nSpotidal2u\n")
+    print("\nSpotidal2u")
     run()
-
 
 if __name__ == "__main__":
     main()

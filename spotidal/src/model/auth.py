@@ -2,10 +2,10 @@ import sys
 import spotipy as sp_api
 import tidalapi as td_api
 import webbrowser
-import spotidal.src.model.helpers.utils as utils
-from spotidal.src.model.helpers.type.file import Files
-from spotidal.src.view.text import Text as t
-from spotidal.src.view.setup import get_credentials
+from .helpers.type.file import Files
+from ..view.text import Text as t
+from ..view.setup import get_credentials
+
 __all__ = ["open_sp_session", "open_td_session"]
 
 SPOTIFY_SCOPES = "playlist-read-private, user-library-read"

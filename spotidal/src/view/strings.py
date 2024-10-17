@@ -1,4 +1,4 @@
-from spotidal.src.view.prompt import Prompt as type
+from .prompt import Prompt as type
 
 MAIN = "main", type.LIST
 SYNC = "sync", type.LIST
