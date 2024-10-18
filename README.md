@@ -1,34 +1,28 @@
 # Spotidal
+
 An app threesome that offers you love.  
 Enhances your quality of life by transferring your Spotify playlists to TIDAL.  
 Bridging the gap in the music streaming wars, one playlist at a time.
 
+A simple Python app that syncs your playlists and automates the downloading of TIDAL tracks
 
-A simple Python app that syncs your playlists and automates the downloading of TIDAL tracks.
-
-- [Spotidal](#spotidal)
-  - [Features](#features)
-  - [Install](#install)
-  - [Setup](#setup)
-        - [Spotify Credentials](#spotify-credentials)
-        - [TIDAL Credentials](#tidal-credentials)
-        - [Credentials file](#credentials-file)
-  - [To-do](#to-do)
-  - [Credits](#credits)
-
-
-
-
-
+- [Features](#features)
+- [Install](#install)
+- [Usage](#usage)
+- [Setup](#setup)
+  - [Spotify Credentials](#spotify-credentials)
+  - [TIDAL Credentials](#tidal-credentials)
+  - [Credentials file](#credentials-file)
+- [To-do](#to-do)
+- [Credits](#credits)
 
 ## Features
 
-- **Search** and **select** Spotify playlists, or  
-- **Load** a previously saved **playlist selection** to  
-- **Sync** playlists or  
-- **Download** tracks directly from TIDAL  
+- **Search** and **select** Spotify playlists, or
+- **Load** a previously saved **playlist selection** to
+- **Sync** playlists or
+- **Download** tracks directly from TIDAL
 - Includes a **log for 404 not found tracks**
-
 
 ## Install
 
@@ -39,20 +33,24 @@ pip install poetry
 ```
 
 Navigate to project root directory and install all dependencies:
+
 ```bash
 poetry install
 ```
+
+## Usage
 To start up the app :
+
 ```bash
-poetry run spotidal   
+poetry run spotidal
 ```
 
 First time you use it it will ask you about your spotify credentials.
 You can also do it manually, either way check the [next](#spotify-credentials) section to find where to get your credentials.
 
-
 ## Setup
-##### Spotify Credentials
+
+### Spotify Credentials
 
 To use the Spotify API, you'll need your Spotify credentials.
 Besides your `username`, you will need to get a `client ID` and a `client secret` by registering an app in [Spotify for Developers](https://developer.spotify.com/). Follow these steps to obtain them:
@@ -68,10 +66,12 @@ Besides your `username`, you will need to get a `client ID` and a `client secret
 
 Once the app is created, copy the `Client ID` and `Client Secret` from your app settings.
 
-##### TIDAL Credentials
+### TIDAL Credentials
+
 We will get your TIDAL Credentials automatically. You just need to open a link in your browser and accept the connection to this app.
 
-##### Credentials file
+### Credentials file
+
 Spotidal will use these credentials, which should be stored in a `credentials.yaml` file located in the `~/.config/spotidal` directory.
 Credentials file structure should look like this:
 
@@ -93,13 +93,13 @@ tidal:
 
 ---
 
-## To-do  
-- [ ] Simplify setup and ensure all critical files are ready  
-- [ ] Improve search functionality for missing tracks  
-- [ ] Optimize the sync process for TIDAL tracks  
-- [ ] Make TIDAL tracks persist across syncs  
-- [ ] Fully integrate TIDAL playlist track downloads
+## To-do
 
+- [ ] Simplify setup and ensure all critical files are ready
+- [ ] Improve search functionality for missing tracks
+- [ ] Optimize the sync process for TIDAL tracks
+- [ ] Make TIDAL tracks persist across syncs
+- [ ] Fully integrate TIDAL playlist track downloads
 
 ---
 
@@ -109,8 +109,7 @@ This project began as a fork of [spotify_to_tidal](https://github.com/spotify2ti
 It was built for personal use and learning purposes. There is an automation feature that uses [tidal-media-downloader](https://github.com/yaronzz/Tidal-Media-Downloader).  
 Thanks to everyone involved!
 
-
 _Does this project solve a major problem?_
 _Will this automation end anyone's suffering?_
 _Probably not._
-_But did I enjoy it building it...?_ 
+_But did I enjoy it building it...?_
