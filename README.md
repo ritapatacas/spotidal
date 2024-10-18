@@ -32,9 +32,16 @@ Install [poetry](https://pypi.org/project/poetry/) if you don't have it already.
 pip install poetry
 ```
 
+Install [poetry](https://pypi.org/project/poetry/) if you don't have it already.
+
+```bash
+pip install poetry
+```
+
 Navigate to project root directory and install all dependencies:
 
 ```bash
+poetry install
 poetry install
 ```
 
