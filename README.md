@@ -77,9 +77,8 @@ spotify:
   client_secret: <your_client_secret>
   username: <your_username>
   redirect_uri: http://localhost:8888
-  scope: "user-library-read playlist-read-private user-follow-read playlist-modify-private playlist-modify-public"
-  max_concurrency: 10
-  rate_limit: 10
+  scope: playlist-read-private, user-library-read
+  requests_timeout: 2
 
 tidal:
   access_token: <your_access_token>
