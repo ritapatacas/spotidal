@@ -32,16 +32,9 @@ Install [poetry](https://pypi.org/project/poetry/) if you don't have it already.
 pip install poetry
 ```
 
-Install [poetry](https://pypi.org/project/poetry/) if you don't have it already.
-
-```bash
-pip install poetry
-```
-
 Navigate to project root directory and install all dependencies:
 
 ```bash
-poetry install
 poetry install
 ```
 
@@ -57,7 +50,7 @@ You can also do it manually, either way check the [next](#spotify-credentials) s
 
 ## Setup
 
-### Spotify Credentials
+#### Spotify Credentials
 
 To use the Spotify API, you'll need your Spotify credentials.
 Besides your `username`, you will need to get a `client ID` and a `client secret` by registering an app in [Spotify for Developers](https://developer.spotify.com/). Follow these steps to obtain them:
@@ -73,7 +66,7 @@ Besides your `username`, you will need to get a `client ID` and a `client secret
 
 Once the app is created, copy the `Client ID` and `Client Secret` from your app settings.
 
-### TIDAL Credentials
+#### TIDAL Credentials
 
 We will get your TIDAL Credentials automatically. You just need to open a link in your browser and accept the connection to this app.
 
