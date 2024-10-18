@@ -11,7 +11,7 @@ A simple Python app that syncs your playlists and automates the downloading of T
   - [Install](#install)
   - [Setup](#setup)
         - [Spotify Credentials](#spotify-credentials)
-        - [Tidal Credentials](#tidal-credentials)
+        - [TIDAL Credentials](#tidal-credentials)
       - [Credentials file](#credentials-file)
   - [To-do](#to-do)
   - [Credits](#credits)
@@ -32,19 +32,23 @@ A simple Python app that syncs your playlists and automates the downloading of T
 
 ## Install
 
-Navigate to project root directory and install all dependencies:
+Install [poetry](https://pypi.org/project/poetry/) if you don't have it already.
 
 ```bash
-pip install -e .   
+pip install poetry
 ```
 
-To start up the app run the command-script:
+Navigate to project root directory and install all dependencies:
 ```bash
-spotidal
+poetry install
+```
+To start up the app :
+```bash
+poetry run spotidal   
 ```
 
 First time you use it it will ask you about your spotify credentials.
-You can also do it manually, either way check the next section to find where to get your credentials.
+You can also do it manually, either way check the [next](#spotify-credentials) section to find where to get your credentials.
 
 
 ## Setup
@@ -64,8 +68,8 @@ Besides your `username`, you will need to get a `client ID` and a `client secret
 
 Once the app is created, copy the `Client ID` and `Client Secret` from your app settings.
 
-##### Tidal Credentials
-We will get your Tidal Credentials automatically. You just need to open a link in your browser and accept the connection to this app.
+##### TIDAL Credentials
+We will get your TIDAL Credentials automatically. You just need to open a link in your browser and accept the connection to this app.
 
 #### Credentials file
 Spotidal will use these credentials, which should be stored in a `credentials.yaml` file located in the `~/.config/spotidal` directory.
