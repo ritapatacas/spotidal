@@ -2,6 +2,7 @@ import os
 import json
 import yaml
 from enum import Enum
+from tidalapi import playlist
 
 
 class Path(Enum):
@@ -21,11 +22,11 @@ class Files(Enum):
     PLAYLISTS = Path.USR, 'playlists', Ext.JSON
     PARSED_PLAYLISTS = Path.USR, 'parsed_playlists', Ext.YML
     SELECTION = Path.USR, 'selection', Ext.JSON
-    NOT_FOUND = Path.USR, 'not_found', Ext.TXT
+    NOT_FOUND = Path.USR, 'not_found', Ext.YML
     CREDENTIALS = Path.USR, "credentials", Ext.YML
 
-    def save(self, data):
-        file_path = self.resolver(self)
+    def save(self, data, playlist_name=None):
+        file_path = self.resolver(self, playlist_name)
         _, _, file_ext = self.value
         
         # create file if it doesn't exist
@@ -41,7 +42,6 @@ class Files(Enum):
                 with open(file_path, 'w', encoding="utf-8") as f:
                     json.dump(data, f, indent=4)
 
-            # todo make sp session data persist in same doc as td session
             elif file_ext == Ext.YML:
                 with open(file_path, 'w', encoding="utf-8") as f:
                     yaml.dump(data, f)
@@ -70,6 +70,8 @@ class Files(Enum):
             return {}
 
     @classmethod
-    def resolver(cls, file_enum):
+    def resolver(cls, file_enum, playlist_name=None):
         path, file_name, ext = file_enum.value
+        if file_enum == cls.NOT_FOUND and playlist_name:
+            file_name = f"{file_name}/{playlist_name}"
         return os.path.expanduser(os.path.join(path.value, file_name + ext.value))

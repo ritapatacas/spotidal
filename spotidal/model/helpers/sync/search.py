@@ -118,20 +118,27 @@ async def search_new_tracks_on_td(
     rate_limiter_task.cancel()
 
     # todo song404 is for future use with track id to repeat search
-    song404 = []
-    not_found = []
+    songs404 = []
+        
     for idx, sp_track in enumerate(tracks_to_search):
         if search_results[idx]:
             track_match_cache.insert((sp_track["id"], search_results[idx].id))
         else:
-            song404.append(
-                [f"{sp_track['id']}", f"{','.join([a['name'] for a in sp_track['artists']])} - {sp_track['name']}"]
-            )
-            not_found.append(
-                f"{sp_track['name']} - {','.join([a['name'] for a in sp_track['artists']])}\n"
-            )
-            print(t.error(f" could not find the track '{song404[-1]}'"))
-    Files.NOT_FOUND.save(''.join(not_found) + '\n')
+            track_dict = {
+                "sp_id": sp_track["id"],
+                "track": {
+                    "name": sp_track["name"],
+                    "artists": f"{','.join([a['name'] for a in sp_track['artists']])}",
+                    "album": sp_track["album"]["name"],
+                    "track_number": sp_track["track_number"],
+                }
+            }
+
+            songs404.append(track_dict)
+            print(t.error(f" could not find the track '{track_dict['track']}'"))
+            
+    if songs404.__len__() > 0:
+        Files.NOT_FOUND.save(songs404, playlist_name)
 
 def pick_td_playlist_for_sp_playlist(
     sp_playlist, td_playlists: Mapping[str, tidalapi.Playlist]
