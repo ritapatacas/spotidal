@@ -16,6 +16,12 @@ class Model:
 
     def setup_credentials(self, credentials):
         auth.save_sp_credentials(credentials)
+    
+    def get_session_log(self):
+        sp_id = self.sessions["sp"].me()["id"]
+        td_id = self.sessions["td"].user.id
+
+        return "spotify user " + sp_id + " / tidal " + str(td_id)
         
     def get_user_playlists(self):
         self.user_playlists = self.sessions["sp"].current_user_playlists()["items"]

@@ -100,7 +100,7 @@ async def search_new_tracks_on_td(
 
     # Search for each of the tracks on Tidal concurrently
     task_description = (
-        "> searching tidal for {}/{} tracks in spotify playlist '{}'".format(
+        "searching tidal for {}/{} tracks in spotify playlist '{}'".format(
             len(tracks_to_search), len(sp_tracks), playlist_name
         )
     )
@@ -113,7 +113,7 @@ async def search_new_tracks_on_td(
             )
             for t in tracks_to_search
         ],
-        desc=task_description,
+        desc=t.busy(task_description),
     )
     rate_limiter_task.cancel()
 
@@ -135,7 +135,7 @@ async def search_new_tracks_on_td(
             }
 
             songs404.append(track_dict)
-            print(t.error(f" could not find the track '{track_dict['track']}'"))
+            print(t.error(f" could not find the track '{track_dict['track']['name']} {track_dict['track']['artists']}'"))
             
     if songs404.__len__() > 0:
         Files.NOT_FOUND.save(songs404, playlist_name)

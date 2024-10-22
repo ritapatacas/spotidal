@@ -19,18 +19,15 @@ class ControllerMain:
             for p in e:
                 self._sync.by_sp_id(playlist.get_info(p)["sp_id"])
         else:
-            print("\n\n controller sync e ")
-            print(e)
-            print(playlist.get_info(e))
             self._sync.by_sp_id(playlist.get_info(e)["sp_id"])
 
     def download(self, e):
-        # todo get rid of get_parsed_playlists running every time
-        self.model.get_parsed_playlists()
         if isinstance(e, list):
             for p in e:
+                self.sync(p)
                 self._download.by_td_id(playlist.get_info(p)["td_id"])
         else:
+            self.sync(e)
             self._download.by_td_id(playlist.get_info(e)["td_id"])
 
     def reset_sp_session(self):
