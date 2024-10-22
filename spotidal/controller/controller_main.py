@@ -1,4 +1,4 @@
-import spotidal.model.model as model
+from spotidal.model import Model
 from ..model.helpers.type import PlaylistReference as playlist
 import spotidal.view.view as view
 
@@ -8,7 +8,7 @@ from ..model.download import Download
 
 
 class ControllerMain:
-    def __init__(self, model):
+    def __init__(self, model: Model):
         self.model = model
         self._settings = Settings()
         self._sync = Sync(self.model.sessions)
@@ -24,7 +24,9 @@ class ControllerMain:
             print(playlist.get_info(e))
             self._sync.by_sp_id(playlist.get_info(e)["sp_id"])
 
-    def download(self, e, sync=True):
+    def download(self, e):
+        # todo get rid of get_parsed_playlists running every time
+        self.model.get_parsed_playlists()
         if isinstance(e, list):
             for p in e:
                 self._download.by_td_id(playlist.get_info(p)["td_id"])

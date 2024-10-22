@@ -1,5 +1,5 @@
 import spotidal.model.auth as auth
-from ..model.helpers import synchronizer as sync
+from ..model.helpers.sync.playlists_handler import get_td_playlists
 from ..model.helpers.utils import fetch_parsed_playlists
 from ..model.helpers.type.file import Files
 from ..view.text import Text as t
@@ -31,7 +31,7 @@ class Model:
 
     def get_parsed_playlists(self):
         sp_playlists = self.sessions["sp"].current_user_playlists()["items"]
-        td_playlists = sync._playlists.get_td_playlists(self.sessions["td"])
+        td_playlists = get_td_playlists(self.sessions["td"])
         return fetch_parsed_playlists(sp_playlists, td_playlists)
 
     def add_to_current_selection(self, e):
