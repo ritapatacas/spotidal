@@ -4,19 +4,14 @@ An app threesome that offers you love.
 Enhances your quality of life by transferring your Spotify playlists to TIDAL.  
 Bridging the gap in the music streaming wars, one playlist at a time.
 
-A simple Python app that syncs your playlists and automates the downloading of TIDAL tracks
 
-- [Features](#features)
 - [Install](#install)
+- [Credentials](#credentials)
 - [Usage](#usage)
-- [Setup](#setup)
-  - [Spotify Credentials](#spotify-credentials)
-  - [TIDAL Credentials](#tidal-credentials)
-  - [Credentials file](#credentials-file)
-- [To-do](#to-do)
 - [Credits](#credits)
 
-## Features
+## What
+A simple Python app that syncs your playlists and automates the downloading of TIDAL tracks
 
 - **Search** and **select** Spotify playlists, or
 - **Load** a previously saved **playlist selection** to
@@ -24,7 +19,11 @@ A simple Python app that syncs your playlists and automates the downloading of T
 - **Download** tracks directly from TIDAL
 - Includes a **log for 404 not found tracks**
 
-## Install
+---
+
+## Getting Started
+
+### Install
 
 Install [poetry](https://pypi.org/project/poetry/) if you don't have it already.
 
@@ -38,19 +37,13 @@ Navigate to project root directory and install all dependencies:
 poetry install
 ```
 
-## Usage
-To start up the app :
-
-```bash
-poetry run spotidal
-```
 
 First time you use it it will ask you about your spotify credentials.
-You can also do it manually, either way check the [next](#spotify-credentials) section to find where to get your credentials.
+You can also do it manually, either way check the [next](#credentials) section to find where to get your credentials.
 
-## Setup
 
-#### Spotify Credentials
+### Credentials
+##### Spotify
 
 To use the Spotify API, you'll need your Spotify credentials.
 Besides your `username`, you will need to get a `client ID` and a `client secret` by registering an app in [Spotify for Developers](https://developer.spotify.com/). Follow these steps to obtain them:
@@ -66,11 +59,11 @@ Besides your `username`, you will need to get a `client ID` and a `client secret
 
 Once the app is created, copy the `Client ID` and `Client Secret` from your app settings.
 
-#### TIDAL Credentials
+##### TIDAL Credentials
 
 We will get your TIDAL Credentials automatically. You just need to open a link in your browser and accept the connection to this app.
 
-### Credentials file
+##### Credentials file
 
 Spotidal will use these credentials, which should be stored in a `credentials.yaml` file located in the `~/.config/spotidal` directory.
 Credentials file structure should look like this:
@@ -89,6 +82,16 @@ tidal:
   refresh_token: <your_refresh_token>
   session_id: <your_session_id>
   token_type: Bearer
+```
+
+
+---
+
+## Usage
+To start up the app, run in app directory:
+
+```bash
+poetry run spotidal
 ```
 
 ---
