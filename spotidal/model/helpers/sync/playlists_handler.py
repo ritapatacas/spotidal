@@ -16,10 +16,12 @@ def get_td_playlists_wrapper(
     tidal_playlists = asyncio.run(get_all_playlists(td_session.user))
     return {playlist.name: playlist for playlist in tidal_playlists}
 
+
 def get_td_playlists(
     td_session: tidalapi.Session,
 ) -> Mapping[str, tidalapi.Playlist]:
     return get_td_playlists_wrapper(td_session).values()
+
 
 def get_user_playlist_mappings(
     sp_session: spotipy.Spotify, td_session: tidalapi.Session, config
@@ -29,11 +31,10 @@ def get_user_playlist_mappings(
     tidal_playlists = get_td_playlists_wrapper(td_session)
     for spotify_playlist in spotify_playlists:
         results.append(
-            pick_td_playlist_for_sp_playlist(
-                spotify_playlist, tidal_playlists
-            )
+            pick_td_playlist_for_sp_playlist(spotify_playlist, tidal_playlists)
         )
     return results
+
 
 async def _fetch_all_from_sp_in_chunks(fetch_function: Callable) -> List[dict]:
     output = []
@@ -54,14 +55,11 @@ async def _fetch_all_from_sp_in_chunks(fetch_function: Callable) -> List[dict]:
         )
         for r in extra_results:
             output.extend(
-                [
-                    item["track"]
-                    for item in r["items"]
-                    if item["track"] is not None
-                ]
+                [item["track"] for item in r["items"] if item["track"] is not None]
             )
 
     return output
+
 
 async def get_playlists_from_sp(sp_session: spotipy.Spotify, config):
     # get all the playlists from the Spotify account
@@ -98,9 +96,8 @@ async def get_playlists_from_sp(sp_session: spotipy.Spotify, config):
 
     return list(filter(exclude_filter, filter(my_playlist_filter, playlists)))
 
-async def get_tracks_from_sp_playlist(
-    sp_session: spotipy.Spotify, sp_playlist
-):
+
+async def get_tracks_from_sp_playlist(sp_session: spotipy.Spotify, sp_playlist):
     def _get_tracks_from_sp_playlist(offset: int, playlist_id: str):
         fields = "next,total,limit,items(track(name,album(name,artists),artists,track_number,duration_ms,id,external_ids(isrc))),type"
         return sp_session.playlist_tracks(
@@ -118,4 +115,10 @@ async def get_tracks_from_sp_playlist(
     def track_filter(item):
         return item.get("type", "track") == "track"  # type may be 'episode' also
 
-    return list(filter(track_filter, items))
+    sanity_filter = (
+        lambda item: "album" in item
+        and "name" in item["album"]
+        and "artists" in item["album"]
+        and len(item["album"]["artists"]) > 0
+    )
+    return list(filter(sanity_filter, filter(track_filter, items)))
