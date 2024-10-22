@@ -68,9 +68,7 @@ def get_tracks_for_new_td_playlist(
         if td_id:
             if td_id in seen_tracks:
                 track_name = t["name"]
-                artist_names = ", ".join(
-                    [artist["name"] for artist in t["artists"]]
-                )
+                artist_names = ", ".join([artist["name"] for artist in t["artists"]])
                 print(
                     txt.error(
                         f"'{track_name}', '{artist_names}' is duplicate and will be ignored"

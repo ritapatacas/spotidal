@@ -29,16 +29,15 @@ class Controller:
             self. app.reset_sp_session()
         self.model.sessions = {"sp": sp, "td": td}
         
-        sp_id = self.model.sessions["sp"].me()["id"]
-        td_id = self.model.sessions["td"].user.id
-        print(t.log("spotify logged in for " + sp_id))
-        print(t.log("tidal logged in for " + str(td_id)))
+        log = self.model.get_session_log()
+        print(t.log_grey(log))
 
     def run(self):
         while True:
             try:
                 menu = view.main_menu()
                 if menu == MainMenu.SETTINGS[0]:
+                    # todo add settings menu
                     if view.settings_menu():
                         self.app.reset_settings()
                     

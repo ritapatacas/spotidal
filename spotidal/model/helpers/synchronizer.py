@@ -39,9 +39,8 @@ async def sync_playlist(
     if td_playlist:
         old_td_tracks = await get_all_playlist_tracks(td_playlist)
     else:
-        print(
-            f"> no playlist found on tidal corresponding to spotify playlist: '{sp_playlist['name']}', creating new playlist"
-        )
+        print(t.error(f"no playlist '{sp_playlist['name']}' found on tidal"))
+        print(t.busy('creating new tidal playlist'))
         td_playlist = td_session.user.create_playlist(
             sp_playlist["name"], sp_playlist["description"]
         )

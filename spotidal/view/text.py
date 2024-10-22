@@ -39,6 +39,10 @@ class Text:
         return str(Colors.GREEN) + "> " + str(Colors.WHITE) + text
 
     @staticmethod
+    def log_grey(text):
+        return str(Colors.GREY_MID) + "_" + text
+    
+    @staticmethod
     def error(text):
         return str(Colors.RED) + " ! " + str(Colors.WHITE) + text
 
@@ -53,4 +57,8 @@ class Text:
 
     @staticmethod
     def busy(text):
-        return str(Colors.PURPLE) + ".." + text + str(Colors.WHITE)
+        return str(Colors.GREEN) + ".." + str(Colors.GREY_BRIGHT) + text + str(Colors.WHITE)
+
+    @staticmethod
+    def track(track):
+        return str(Colors.BLUE) + track + str(Colors.WHITE)

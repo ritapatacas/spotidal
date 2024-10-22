@@ -34,6 +34,7 @@ def clear_selection():
 
 def main_menu():
     main_menu = MainMenu()
+    print('')
     action = main_menu.display()
     return action
 
@@ -58,8 +59,6 @@ def search_menu(get_remaining_playlists):
     while True:
         search_menu = SearchMenu()
         result = search_menu.display(get_remaining_playlists)
-        print('view search menu result')
-        print(result)
         return result
 
 def save_menu():

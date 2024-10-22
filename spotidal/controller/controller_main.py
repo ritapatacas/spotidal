@@ -19,9 +19,6 @@ class ControllerMain:
             for p in e:
                 self._sync.by_sp_id(playlist.get_info(p)["sp_id"])
         else:
-            print("\n\n controller sync e ")
-            print(e)
-            print(playlist.get_info(e))
             self._sync.by_sp_id(playlist.get_info(e)["sp_id"])
 
     def download(self, e):

@@ -35,7 +35,7 @@ def add_multiple_tracks_to_playlist(
 ):
     offset = 0
     with tqdm(
-        desc="> adding new tracks to tidal playlist", total=len(track_ids)
+        desc=t.busy('adding new tracks to tidal playlist'), total=len(track_ids)
     ) as progress:
         while offset < len(track_ids):
             count = min(chunk_size, len(track_ids) - offset)
