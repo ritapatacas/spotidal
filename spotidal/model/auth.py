@@ -16,7 +16,9 @@ SPOTIFY_REDIRECT_URI = "http://localhost:8888"
 
 def open_sp_session() -> sp_api.Spotify:
     try:
-        credentials = Files.CREDENTIALS.load()["spotify"]
+        credentials = (Files.CREDENTIALS.load() or {}).get("spotify")
+        if not credentials:
+            raise KeyError("spotify")
     except:
         t.error("no spotify credentials found, please provide them")
         return False
@@ -135,7 +137,7 @@ def get_td_session() -> td_api.Session:
             print(t.error("error loading previous tidal session \n" + str(e)))
     else:
         print(t.error("no previous tidal session found, opening new session"))
-        open_td_session()
+        return open_td_session()
 
 
 def open_sessions():

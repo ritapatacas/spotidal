@@ -5,6 +5,7 @@ from spotidal.controller.controller_main import ControllerMain
 
 import spotidal.view.view as view
 from spotidal.view.text import Text as t
+from spotidal.view.setup import get_credentials
 
 from spotidal.view.prompt import (
     MainMenu,
@@ -24,10 +25,12 @@ class Controller:
 
     def init_sessions(self):
         sp = self.model.open_sp_session()
-        td = self.model.open_td_session()
         if not sp:
-            self. app.reset_sp_session()
+            self.model.setup_credentials(get_credentials())
+            sp = self.model.open_sp_session()
+        td = self.model.open_td_session()
         self.model.sessions = {"sp": sp, "td": td}
+        self.model.get_parsed_playlists()
         
         log = self.model.get_session_log()
         print(t.log_grey(log))
@@ -51,9 +54,9 @@ class Controller:
                     action = view.selection_mode_menu()
 
                     if action == SelectionModeMenu.SEARCH[0]:
-                        self.model.current_selection.add(
-                            view.search_menu(self.playlists.not_selected())
-                        )
+                        selected = view.search_menu(self.playlists.not_selected())
+                        if selected:
+                            self.model.current_selection.add(selected)
 
                     elif action == SelectionModeMenu.SELECT[0]:
                         result = view.select_menu(self.playlists.not_selected())
@@ -61,7 +64,9 @@ class Controller:
                             self.model.current_selection.add(r)
 
                     elif action == SelectionModeMenu.BY_ID[0]:
-                        self.model.current_selection.add(view.by_id_menu())
+                        selected = view.by_id_menu()
+                        if selected:
+                            self.model.current_selection.add(selected)
 
                     elif action == SelectionModeMenu.LOAD[0]:
                         self.model.current_selection = set(self.playlists.load())

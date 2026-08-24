@@ -28,7 +28,9 @@ class Files(Enum):
     def save(self, data, playlist_name=None):
         file_path = self.resolver(self, playlist_name)
         _, _, file_ext = self.value
-        
+
+        os.makedirs(os.path.dirname(file_path), exist_ok=True)
+
         # create file if it doesn't exist
         if not os.path.exists(file_path):
             with open(file_path, 'w', encoding="utf-8") as f:

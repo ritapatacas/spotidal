@@ -22,6 +22,8 @@ def _remove_indices_from_playlist(playlist: tidalapi.UserPlaylist, indices: List
     playlist._reparse()
 
 def clear_td_playlist(playlist: tidalapi.UserPlaylist, chunk_size: int = 20):
+    if not playlist._etag:
+        playlist._reparse()
     with tqdm(
         desc="> erasing existing tracks from tidal playlist", total=playlist.num_tracks
     ) as progress:
@@ -39,7 +41,15 @@ def add_multiple_tracks_to_playlist(
     ) as progress:
         while offset < len(track_ids):
             count = min(chunk_size, len(track_ids) - offset)
-            playlist.add(track_ids[offset : offset + chunk_size])
+            if not playlist._etag:
+                playlist._reparse()
+            try:
+                playlist.add(track_ids[offset : offset + chunk_size])
+            except Exception as error:
+                if getattr(getattr(error, "response", None), "status_code", None) != 412:
+                    raise
+                playlist._reparse()
+                playlist.add(track_ids[offset : offset + chunk_size])
             offset += count
             progress.update(count)
 

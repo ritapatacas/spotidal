@@ -17,9 +17,13 @@ class ControllerMain:
     def sync(self, e):
         if isinstance(e, list):
             for p in e:
-                self._sync.by_sp_id(playlist.get_info(p)["sp_id"])
+                info = playlist.get_info(p)
+                if info and info.get("sp_id"):
+                    self._sync.by_sp_id(info["sp_id"])
         else:
-            self._sync.by_sp_id(playlist.get_info(e)["sp_id"])
+            info = playlist.get_info(e)
+            if info and info.get("sp_id"):
+                self._sync.by_sp_id(info["sp_id"])
 
     def download(self, e):
         if isinstance(e, list):
