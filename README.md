@@ -1,16 +1,20 @@
 # Spotidal
 
-An app threesome that offers you love.  
-Enhances your quality of life by transferring your Spotify playlists to TIDAL.  
+Transfers your Spotify playlists to TIDAL.
 Bridging the gap in the music streaming wars, one playlist at a time.
 
+## TL;DR
 
-- [Install](#install)
-- [Credentials](#credentials)
-- [Usage](#usage)
-- [Credits](#credits)
+```bash
+pip install poetry
+poetry install
+poetry run spotidal
+```
+
+First run will ask for your Spotify credentials — see [credentials](#credentials).
 
 ## What
+
 A simple Python app that syncs your playlists and automates the downloading of TIDAL tracks
 
 - **Search** and **select** Spotify playlists, or
@@ -19,61 +23,31 @@ A simple Python app that syncs your playlists and automates the downloading of T
 - **Download** tracks directly from TIDAL
 - Includes a **log for 404 not found tracks**
 
----
+## Credentials
 
-## Getting Started
+### Spotify
 
-### Install
+You need your `username`, a `client ID` and a `client secret`:
 
-Install [poetry](https://pypi.org/project/poetry/) if you don't have it already.
+1. Find your `username` in your account settings or profile URL.
+2. Log in at [Spotify for Developers](https://developer.spotify.com/) and go to `Dashboard` > `Create App`.
+3. Fill in a `Name` and `Description`, set both `Website` and `Redirect URIs` to `http://127.0.0.1:8888/callback`, and check the `Web API` box.
+4. Copy the `Client ID` and `Client Secret` from the app settings.
 
-```bash
-pip install poetry
-```
+### TIDAL
 
-Navigate to project root directory and install all dependencies:
+Obtained automatically — just open the link shown in your browser and accept the connection.
 
-```bash
-poetry install
-```
+### Credentials file
 
-
-First time you use it it will ask you about your spotify credentials.
-You can also do it manually, either way check the [next](#credentials) section to find where to get your credentials.
-
-
-### Credentials
-##### Spotify
-
-To use the Spotify API, you'll need your Spotify credentials.
-Besides your `username`, you will need to get a `client ID` and a `client secret` by registering an app in [Spotify for Developers](https://developer.spotify.com/). Follow these steps to obtain them:
-
-1. Find your Spotify `username` either in your account settings or in your Spotify profile URL.
-2. Go to the [Spotify for Developers](https://developer.spotify.com/) website and log in.
-3. Navigate to `Dashboard` > `Create App`.
-4. Choose a `Name` for your app.
-5. Provide a `Description` (you can write anything).
-6. Set the `Website` to `http://localhost:8888/callback`.
-7. Define the `Redirect URIs` as `http://localhost:8888`.
-8. Check the `Web API` box.
-
-Once the app is created, copy the `Client ID` and `Client Secret` from your app settings.
-
-##### TIDAL Credentials
-
-We will get your TIDAL Credentials automatically. You just need to open a link in your browser and accept the connection to this app.
-
-##### Credentials file
-
-Spotidal will use these credentials, which should be stored in a `credentials.yaml` file located in the `~/.config/spotidal` directory.
-Credentials file structure should look like this:
+Stored in `~/.config/spotidal/credentials.yaml`:
 
 ```yaml
 spotify:
   client_id: <your_client_id>
   client_secret: <your_client_secret>
   username: <your_username>
-  redirect_uri: http://localhost:8888
+  redirect_uri: http://127.0.0.1:8888/callback
   scope: playlist-read-private, user-library-read
   requests_timeout: 2
 
@@ -84,18 +58,6 @@ tidal:
   token_type: Bearer
 ```
 
-
----
-
-## Usage
-To start up the app, run in app directory:
-
-```bash
-poetry run spotidal
-```
-
----
-
 ## To-do
 
 - [ ] Simplify setup and ensure all critical files are ready
@@ -104,12 +66,10 @@ poetry run spotidal
 - [ ] Make TIDAL tracks persist across syncs
 - [ ] Fully integrate TIDAL playlist track downloads
 
----
-
 ## Credits
 
-This project began as a fork of [spotify_to_tidal](https://github.com/spotify2tidal), combined with the [python-tidal](https://github.com/tamland/python-tidal) algorithm.  
-It was built for personal use and learning purposes. There is an automation feature that uses [tidal-media-downloader](https://github.com/yaronzz/Tidal-Media-Downloader).  
+This project began as a fork of [spotify_to_tidal](https://github.com/spotify2tidal), combined with the [python-tidal](https://github.com/tamland/python-tidal) algorithm.
+It was built for personal use and learning purposes. There is an automation feature that uses [tidal-media-downloader](https://github.com/yaronzz/Tidal-Media-Downloader).
 Thanks to everyone involved!
 
 _Does this project solve a major problem?_

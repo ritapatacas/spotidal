@@ -11,7 +11,7 @@ from ..view.setup import get_credentials
 __all__ = ["open_sp_session", "open_td_session"]
 
 SPOTIFY_SCOPES = "playlist-read-private, user-library-read"
-SPOTIFY_REDIRECT_URI = "http://localhost:8888"
+SPOTIFY_REDIRECT_URI = "http://127.0.0.1:8888/callback"
 
 
 def open_sp_session() -> sp_api.Spotify:
@@ -28,7 +28,7 @@ def open_sp_session() -> sp_api.Spotify:
         client_id=credentials["client_id"],
         client_secret=credentials["client_secret"],
         scope=SPOTIFY_SCOPES,
-        redirect_uri=SPOTIFY_REDIRECT_URI,
+        redirect_uri=credentials.get("redirect_uri", SPOTIFY_REDIRECT_URI),
         requests_timeout=2,
     )
 
@@ -87,7 +87,7 @@ def save_sp_credentials(credentials: dict):
                 "client_id": credentials["client_id"],
                 "client_secret": credentials["client_secret"],
                 "scope": SPOTIFY_SCOPES,
-                "redirect_uri": SPOTIFY_REDIRECT_URI,
+                "redirect_uri": credentials.get("redirect_uri", SPOTIFY_REDIRECT_URI),
                 "requests_timeout": 2,
             },
             "tidal": td,
@@ -99,7 +99,7 @@ def save_sp_credentials(credentials: dict):
         "client_id": credentials["client_id"],
         "client_secret": credentials["client_secret"],
         "scope": SPOTIFY_SCOPES,
-        "redirect_uri": SPOTIFY_REDIRECT_URI,
+        "redirect_uri": credentials.get("redirect_uri", SPOTIFY_REDIRECT_URI),
         "requests_timeout": 2,
     }
 
