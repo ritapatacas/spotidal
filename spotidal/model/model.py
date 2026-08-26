@@ -27,6 +27,16 @@ class Model:
         self.user_playlists = self.sessions["sp"].current_user_playlists()["items"]
         return self.user_playlists
 
+    def get_all_user_playlists(self):
+        sp = self.sessions["sp"]
+        results = sp.current_user_playlists()
+        playlists = results["items"]
+        while results["next"]:
+            results = sp.next(results)
+            playlists.extend(results["items"])
+        self.user_playlists = playlists
+        return playlists
+
     def get_playlist_names(self):
         self.user_playlists = self.sessions["sp"].current_user_playlists()["items"]
         names = []

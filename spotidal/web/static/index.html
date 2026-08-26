@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Spotidal</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <main>
+    <header><p class="eyebrow">PLAYLIST BRIDGE</p><h1>Spotidal</h1><p class="lede">Move your listening library from Spotify to Tidal.</p></header>
+    <section class="connect panel"><div><h2>Accounts</h2><p id="status">Checking connections...</p></div><div class="actions"><button id="spotify">Connect Spotify</button><button id="tidal">Connect Tidal</button></div><p id="tidal-link"></p></section>
+    <section id="spotify-form" class="panel hidden"><h2>Spotify credentials</h2><p class="form-note">Enter your Spotify app credentials. They are stored locally. Redirect URI is automatically set to http://127.0.0.1:8888/callback.</p><p class="form-note"><a href="https://github.com/ritapatacas/spotidal#credentials" target="_blank" rel="noreferrer">Read the credentials setup</a> or open the <a href="https://developer.spotify.com/dashboard" target="_blank" rel="noreferrer">Spotify Developer Dashboard</a>.</p><form id="credentials"><label>Username<input name="username" required></label><label>Client ID<input name="client_id" required></label><label>Client secret<input name="client_secret" type="password" required></label><button class="primary" type="submit">Save and continue to Spotify</button></form></section>
+    <section class="panel"><div class="section-head"><div><h2>Playlist map</h2><p>Choose the playlists to sync or download. Matching names are linked automatically.</p></div><button id="refresh">Refresh</button></div><div class="playlist-toolbar hidden" id="toolbar"><input id="search" type="search" placeholder="Search playlists"><div class="toolbar-actions"><button id="select-all" type="button">Select all</button><button id="deselect-all" type="button">Deselect all</button><div class="view-toggle"><button id="view-list" type="button" class="active" title="List view">List</button><button id="view-gallery" type="button" title="Gallery view">Gallery</button></div></div></div><div id="playlists" class="playlist-list"><p class="muted">Connect both accounts to load playlists.</p></div><button id="sync" class="primary" disabled>Sync selected playlists</button> <button id="download" disabled>Download from Tidal</button><div id="progress"></div></section>
+  </main>
+  <div id="modal" class="modal hidden"><div class="modal-box"><div class="modal-head"><h3 id="modal-title"></h3><button id="modal-close" type="button">Close</button></div><div id="modal-body"></div></div></div>
+  <script src="/static/app.js"></script>
+</body>
+</html>

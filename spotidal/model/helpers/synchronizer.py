@@ -1,5 +1,6 @@
 import asyncio
-from typing import List
+import inspect
+from typing import Any, Callable, List
 import spotipy
 import tidalapi
 from tqdm import tqdm
@@ -30,10 +31,18 @@ async def sync_playlist(
     sp_playlist,
     td_playlist: tidalapi.Playlist | None,
     config: dict,
+    progress_callback: Callable[[dict[str, Any]], Any] | None = None,
 ):
+    async def progress(event: dict[str, Any]):
+        if progress_callback:
+            result = progress_callback(event)
+            if inspect.isawaitable(result):
+                await result
+
     sp_tracks = await get_tracks_from_sp_playlist(
         sp_session, sp_playlist
     )
+    await progress({"type": "tracks_loaded", "count": len(sp_tracks)})
     if len(sp_tracks) == 0:
         return
     if td_playlist:
@@ -51,6 +60,7 @@ async def sync_playlist(
     await search_new_tracks_on_td(
         td_session, sp_tracks, sp_playlist["name"], config
     )
+    await progress({"type": "matches_ready", "count": len(sp_tracks)})
     new_td_track_ids = get_tracks_for_new_td_playlist(sp_tracks)
 
     # update the tidal playlist if there are changes
@@ -66,6 +76,7 @@ async def sync_playlist(
         # erase old playlist and add new tracks from scratch if any reordering occurred
         clear_td_playlist(td_playlist)
         add_multiple_tracks_to_playlist(td_playlist, new_td_track_ids)
+    await progress({"type": "playlist_complete", "name": sp_playlist["name"]})
 
 async def sync_favorites(
     sp_session: spotipy.Spotify, td_session: tidalapi.Session, config: dict

@@ -13,6 +13,15 @@ from ..sync import match as _match
 from . import cache as _cache
 from . import request_utils as _req
 
+def _td_search_safe(td_session, query, models):
+    # tidalapi crashes with IndexError when a search result has no artists;
+    # treat those responses as empty results instead of aborting the sync
+    try:
+        return td_session.search(query, models=models)
+    except IndexError:
+        return {"albums": [], "tracks": []}
+
+
 async def td_search(
     sp_track, rate_limiter, td_session: tidalapi.Session
 ) -> tidalapi.Track | None:
@@ -28,7 +37,7 @@ async def td_search(
                 + " "
                 + _match.simple(sp_track["album"]["artists"][0]["name"])
             )
-            album_result = td_session.search(query, models=[tidalapi.album.Album])
+            album_result = _td_search_safe(td_session, query, [tidalapi.album.Album])
             for album in album_result["albums"]:
                 if album.num_tracks >= sp_track[
                     "track_number"
@@ -51,7 +60,7 @@ async def td_search(
             + " "
             + _match.simple(sp_track["artists"][0]["name"])
         )
-        for track in td_session.search(query, models=[tidalapi.media.Track])[
+        for track in _td_search_safe(td_session, query, [tidalapi.media.Track])[
             "tracks"
         ]:
             if _match.match(track, sp_track):

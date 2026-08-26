@@ -25,6 +25,13 @@ class ControllerMain:
             if info and info.get("sp_id"):
                 self._sync.by_sp_id(info["sp_id"])
 
+    def sync_all(self):
+        playlists = self.model.get_all_user_playlists()
+        total = len(playlists)
+        for i, p in enumerate(playlists, start=1):
+            print(f"[{i}/{total}] syncing '{p['name']}'")
+            self._sync.by_sp_id(p["id"])
+
     def download(self, e):
         if isinstance(e, list):
             for p in e:

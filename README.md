@@ -23,6 +23,16 @@ A simple Python app that syncs your playlists and automates the downloading of T
 - **Download** tracks directly from TIDAL
 - Includes a **log for 404 not found tracks**
 
+## Usage
+
+```bash
+poetry run spotidal            # interactive menu
+poetry run spotidal sync-all   # sync every Spotify playlist to TIDAL, no menu
+poetry run spotidal-web        # web interface
+```
+
+- `sync-all` fetches all your Spotify playlists (paginated, no 50-playlist limit) and syncs each one to TIDAL, printing progress as `[i/total] syncing '<name>'`.
+
 ## Credentials
 
 ### Spotify
@@ -30,7 +40,7 @@ A simple Python app that syncs your playlists and automates the downloading of T
 You need your `username`, a `client ID` and a `client secret`:
 
 1. Find your `username` in your account settings or profile URL.
-2. Log in at [Spotify for Developers](https://developer.spotify.com/) and go to `Dashboard` > `Create App`.
+2. Open the [Spotify Developer Dashboard](https://developer.spotify.com/dashboard) and choose `Create App`.
 3. Fill in a `Name` and `Description`, set both `Website` and `Redirect URIs` to `http://127.0.0.1:8888/callback`, and check the `Web API` box.
 4. Copy the `Client ID` and `Client Secret` from the app settings.
 
@@ -38,9 +48,12 @@ You need your `username`, a `client ID` and a `client secret`:
 
 Obtained automatically — just open the link shown in your browser and accept the connection.
 
+Downloads use `tidekeeper`, a maintained fork of Tidal-Media-Downloader, and it is installed automatically when
+needed. To install it manually, run `python -m pip install -U tidekeeper`.
+
 ### Credentials file
 
-Stored in `~/.config/spotidal/credentials.yaml`:
+Stored in `~/.config/spotidal/credentials.yml`:
 
 ```yaml
 spotify:

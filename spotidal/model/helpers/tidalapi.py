@@ -1,5 +1,6 @@
 import asyncio
 import math
+import time
 import tidalapi
 from typing import List
 from tqdm import tqdm
@@ -11,26 +12,54 @@ progress_color = "\033[38;5;102m"
 reset_color = "\033[0m"
 
 
-def _remove_indices_from_playlist(playlist: tidalapi.UserPlaylist, indices: List[int]):
-    headers = {"If-None-Match": playlist._etag}
+def _remove_indices_from_playlist(
+    playlist: tidalapi.UserPlaylist, indices: List[int], attempts: int = 5
+):
     index_string = ",".join(map(str, indices))
-    playlist.request.request(
-        "DELETE",
-        (playlist._base_url + "/items/%s") % (playlist.id, index_string),
-        headers=headers,
-    )
-    playlist._reparse()
+    for attempt in range(attempts):
+        try:
+            playlist.request.request(
+                "DELETE",
+                (playlist._base_url + "/items/%s") % (playlist.id, index_string),
+                headers={"If-None-Match": playlist._etag},
+            )
+            playlist._reparse()
+            return
+        except Exception as error:
+            status = getattr(getattr(error, "response", None), "status_code", None)
+            # 412: stale etag. 400: indices out of range (server state drifted
+            # from our local count). Resync and retry with backoff.
+            if status not in (400, 412):
+                raise
+            time.sleep(0.5 * (attempt + 1))
+            playlist._reparse()
 
 def clear_td_playlist(playlist: tidalapi.UserPlaylist, chunk_size: int = 20):
-    if not playlist._etag:
-        playlist._reparse()
+    playlist._reparse()
     with tqdm(
         desc="> erasing existing tracks from tidal playlist", total=playlist.num_tracks
     ) as progress:
+        stalled = 0
         while playlist.num_tracks:
-            indices = range(min(playlist.num_tracks, chunk_size))
+            before = playlist.num_tracks
+            indices = range(min(before, chunk_size))
             _remove_indices_from_playlist(playlist, indices)
-            progress.update(len(indices))
+            removed = before - playlist.num_tracks
+            progress.update(max(0, removed))
+            stalled = stalled + 1 if removed <= 0 else 0
+            if stalled:
+                # num_tracks metadata can lag behind reality; trust the actual
+                # track listing before retrying or declaring failure
+                if not playlist.tracks(limit=1):
+                    progress.update(playlist.num_tracks)
+                    break
+                time.sleep(1.0 * stalled)
+                playlist._reparse()
+            if stalled >= 5:
+                raise RuntimeError(
+                    "could not erase tracks from tidal playlist '%s' (no progress after 5 attempts)"
+                    % playlist.name
+                )
 
 def add_multiple_tracks_to_playlist(
     playlist: tidalapi.UserPlaylist, track_ids: List[int], chunk_size: int = 20

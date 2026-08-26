@@ -84,6 +84,9 @@ class Controller:
 def main():
     print("\nSpotidal2u")
     controller = Controller()
+    if len(sys.argv) > 1 and sys.argv[1] == "sync-all":
+        controller.app.sync_all()
+        return
     controller.run()
 
 

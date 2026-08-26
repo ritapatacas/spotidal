@@ -136,8 +136,9 @@ def get_td_session() -> td_api.Session:
         except Exception as e:
             print(t.error("error loading previous tidal session \n" + str(e)))
     else:
-        print(t.error("no previous tidal session found, opening new session"))
-        return open_td_session()
+        print(t.error("no previous tidal session found"))
+    print(t.log("opening new tidal session"))
+    return open_td_session()
 
 
 def open_sessions():
