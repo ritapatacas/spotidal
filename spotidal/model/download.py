@@ -1,3 +1,4 @@
+import asyncio
 from urllib.parse import urlparse
 
 import tidalapi
@@ -9,6 +10,7 @@ from .helpers.sync.match import match
 from .helpers.sync.playlists_handler import get_td_playlists_wrapper
 from .helpers.sync.search import pick_td_playlist_for_sp_playlist
 from .helpers.synchronizer import sync_playlists_wrapper
+from .helpers.tidalapi import get_all_playlist_tracks
 from .library import MusicLibrary
 
 class Download:
@@ -38,11 +40,11 @@ class Download:
         if service == "tidal":
             playlist = self.td_session.playlist(media_id) if media_type == "playlist" else None
             track = self.td_session.track(media_id) if media_type == "track" else None
-            completed = download(
-                url.strip(), display_name=track.name if track else None
-            )
-            if playlist and completed:
+            if playlist:
+                self._download_tidal_playlist(playlist)
                 MusicLibrary(Files.SETTINGS.load().get("downloadPath", "~/Spotidal")).associate_tidal_playlist(playlist, media_id)
+            else:
+                download(url.strip(), display_name=track.name if track else None)
             return
         if media_type == "playlist":
             td_playlist = self._sync_playlist(media_id)
@@ -53,9 +55,8 @@ class Download:
                 )
             if td_playlist is None:
                 raise ValueError("Spotify playlist could not be converted to TIDAL")
-            completed = download(f"https://tidal.com/playlist/{td_playlist.id}")
-            if completed:
-                MusicLibrary(Files.SETTINGS.load().get("downloadPath", "~/Spotidal")).associate_tidal_playlist(td_playlist, str(td_playlist.id))
+            self._download_tidal_playlist(td_playlist)
+            MusicLibrary(Files.SETTINGS.load().get("downloadPath", "~/Spotidal")).associate_tidal_playlist(td_playlist, str(td_playlist.id))
             return
         if media_type == "track":
             tracks = [self.sp_session.track(media_id)]
@@ -73,6 +74,14 @@ class Download:
                 )
             else:
                 print(f"> could not find '{spotify_track['name']}' on TIDAL")
+
+    def _download_tidal_playlist(self, playlist):
+        tracks = asyncio.run(get_all_playlist_tracks(playlist))
+        for track in tracks:
+            download(
+                f"https://tidal.com/track/{track.id}",
+                display_name=track.name,
+            )
 
     def _find_tidal_track(self, spotify_track):
         query = f"{spotify_track['name']} {spotify_track['artists'][0]['name']}"

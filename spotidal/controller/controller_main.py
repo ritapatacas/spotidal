@@ -10,6 +10,7 @@ from ..model.download import Download
 from ..model.flac_to_mp3 import FlacToMp3
 from ..model.library import MusicLibrary
 from ..model.library_watcher import LibraryWatcher
+from ..model.helpers.td_downloader import clean_tmp
 from ..view.text import Text as t
 
 
@@ -90,6 +91,10 @@ class ControllerMain:
     def stop_library_monitoring(self):
         if self._library_watcher:
             self._library_watcher.stop()
+
+    def clean_tmp(self):
+        clean_tmp(self._settings.get_download_dir())
+        print(t.log("temporary download files cleaned"))
 
     def reset_sp_session(self):
         sp_credentials = view.setup_menu()

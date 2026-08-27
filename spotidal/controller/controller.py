@@ -62,6 +62,8 @@ class Controller:
                         self._database_settings()
                     elif action == SettingsMenu.DEFAULT_SELECTION:
                         self._default_selection()
+                    elif action == SettingsMenu.CLEAN_TMP:
+                        self.app.clean_tmp()
                     
                 elif menu == MainMenu.SYNC[0] or menu == MainMenu.DOWNLOAD[0]:
                     if self.model.current_selection:

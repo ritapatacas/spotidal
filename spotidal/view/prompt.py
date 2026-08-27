@@ -112,8 +112,9 @@ class SettingsMenu(MenuBase):
     DOWNLOAD_SETTINGS = "download settings"
     DATABASE_SETTINGS = "database settings"
     DEFAULT_SELECTION = "playlists default selection"
+    CLEAN_TMP = "clean tmp"
     BACK = "back"
-    SETTINGS_OPT = [DOWNLOAD_SETTINGS, DATABASE_SETTINGS, DEFAULT_SELECTION, BACK]
+    SETTINGS_OPT = [DOWNLOAD_SETTINGS, DATABASE_SETTINGS, DEFAULT_SELECTION, CLEAN_TMP, BACK]
 
     def __init__(self):
         super().__init__(Prompt.LIST)

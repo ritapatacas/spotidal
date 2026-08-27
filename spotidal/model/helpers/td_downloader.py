@@ -90,6 +90,10 @@ def _remove_partial_files(download_path):
         time.sleep(0.25)
 
 
+def clean_tmp(download_path):
+    _remove_partial_files(download_path)
+
+
 def _flac_files(download_path):
     root = Path(download_path)
     if not root.is_dir():
@@ -120,6 +124,7 @@ def _report_downloads(output, download_path, previous_files):
             print(t.error(line.split("] ", 1)[-1]))
         elif "[SUCCESS]" in line:
             title = line.split("] ", 1)[-1].split(" (skip:", 1)[0].strip()
+            print(t.log(f"downloaded track {title}"))
             matches = [
                 file_path
                 for file_path in current_files
@@ -153,13 +158,54 @@ def _wait_for_conversion(process, output_file):
         )
 
 
+def _run_tidekeeper(command, environment, timeout):
+    output_queue = Queue()
+    process = subprocess.Popen(
+        command,
+        env=environment,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        bufsize=1,
+    )
+
+    def read_output():
+        for line in process.stdout:
+            output_queue.put(line)
+        output_queue.put(None)
+
+    threading.Thread(target=read_output, daemon=True).start()
+    output = []
+    deadline = time.monotonic() + timeout
+    finished = False
+    while time.monotonic() < deadline:
+        try:
+            line = output_queue.get(timeout=0.1)
+            if line is None:
+                finished = True
+                break
+            output.append(line)
+            if "[DL Track] name=" in line:
+                print(t.busy(f"downloading '{line.split('[DL Track] name=', 1)[1].strip()}'..."))
+        except Empty:
+            if process.poll() is not None:
+                finished = True
+                break
+    if not finished:
+        process.kill()
+        process.wait()
+        raise subprocess.TimeoutExpired(command, timeout)
+    process.wait()
+    return process.returncode, "".join(output)
+
+
 def check_login():
     # tidekeeper has no login subcommand; auth happens on first download.
     # --doctor validates config, token, and local tools.
     subprocess.run(["tidekeeper", "--doctor"])
 
 
-def download_url(url, timeout=240, display_name=None):
+def download_url(url, timeout=3600, display_name=None):
     check_and_install_tidekeeper()
 
     label = f" '{display_name}'" if display_name else ""
@@ -195,14 +241,7 @@ def download_url(url, timeout=240, display_name=None):
     previous_files = _flac_files(effective_download_path)
 
     try:
-        result = subprocess.run(
-            command,
-            env=environment,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-        )
-        output = result.stdout + result.stderr
+        return_code, output = _run_tidekeeper(command, environment, timeout)
         _remove_partial_files(effective_download_path)
         completed_files = _report_downloads(
             output, effective_download_path, previous_files
@@ -214,7 +253,7 @@ def download_url(url, timeout=240, display_name=None):
         tidal_track_id = _tidal_track_id(url)
         for flac_file in completed_files:
             library.import_file(flac_file, tidal_id=tidal_track_id)
-        if result.returncode == 0 and settings.get("autoConvertMp3", True):
+        if return_code == 0 and settings.get("autoConvertMp3", True):
             flac_root = Path(effective_download_path)
             mp3_root = Path(settings.get("mp3Directory", flac_root.parent / "mp3")).expanduser()
             for flac_file in completed_files:
@@ -238,10 +277,11 @@ def download_url(url, timeout=240, display_name=None):
                     args=(conversion, mp3_file),
                     daemon=True,
                 ).start()
-        if result.returncode != 0:
+        if return_code != 0:
             print("> tidekeeper failed; see its failed-tracks.txt for retryable tracks")
         return completed_files
     except subprocess.TimeoutExpired:
+        _remove_partial_files(effective_download_path)
         print(
             f"> timed out after {timeout} seconds.\n> please go to settings > download troubleshooting"
         )
