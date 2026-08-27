@@ -51,13 +51,17 @@ class Text:
         return str(Colors.YELLOW) + " ! " + str(Colors.WHITE) + text
 
     @staticmethod
+    def grey(text):
+        return str(Colors.GREY_MID) + text + str(Colors.WHITE)
+
+    @staticmethod
+    def red(text):
+        return str(Colors.RED) + text + str(Colors.WHITE)
+
+    @staticmethod
     def display_selection(selection):
-        start = (
-            str(Colors.GREEN) + "> " + str(Colors.WHITE) + "current selection [ " + str(Colors.PURPLE)
-        )
-        selection = ", ".join(selection)
-        end = str(Colors.WHITE) + " ]"
-        return start + selection + end
+        start = str(Colors.GREEN) + "> " + str(Colors.WHITE) + "current selection"
+        return start + "\n" + "\n".join(f"  {item}" for item in sorted(selection))
 
     @staticmethod
     def busy(text):

@@ -6,6 +6,7 @@ from spotidal.controller.controller_main import ControllerMain
 
 import spotidal.view.view as view
 from spotidal.view.text import Text as t
+from spotidal.model.helpers.td_downloader import pop_conversion_messages
 from spotidal.view.setup import get_credentials
 
 from spotidal.view.prompt import (
@@ -46,6 +47,8 @@ class Controller:
     def run(self):
         while True:
             try:
+                for message in pop_conversion_messages():
+                    print(message)
                 menu = view.main_menu()
                 if menu == MainMenu.QUIT[0]:
                     self.app.stop_library_monitoring()
@@ -57,21 +60,13 @@ class Controller:
                         self._download_settings()
                     elif action == SettingsMenu.DATABASE_SETTINGS:
                         self._database_settings()
-                    elif action == SettingsMenu.TIDEKEEPER_SETTINGS:
-                        self._tidekeeper_settings()
                     elif action == SettingsMenu.DEFAULT_SELECTION:
                         self._default_selection()
-                    elif action == SettingsMenu.LOAD:
-                        self.model.current_selection = self.playlists.load()
-                    elif action == SettingsMenu.SAVE_SELECTION:
-                        selection = view.save_menu()
-                        if selection is not None:
-                            self.playlists.save(selection)
                     
                 elif menu == MainMenu.SYNC[0] or menu == MainMenu.DOWNLOAD[0]:
                     if self.model.current_selection:
                         print(t.display_selection(self.model.current_selection))
-                    action = view.selection_mode_menu(menu == MainMenu.DOWNLOAD[0])
+                    action = view.selection_mode_menu(True)
 
                     if action == SelectionModeMenu.SEARCH[0]:
                         playlists = (
@@ -91,14 +86,19 @@ class Controller:
                         for r in result:
                             self.model.current_selection.add(r)
 
+                    elif action == SelectionModeMenu.LOAD:
+                        self.model.current_selection = set(self.playlists.load())
+
                     elif action == SelectionModeMenu.URL:
-                        if menu == MainMenu.DOWNLOAD[0]:
-                            url = view.url_menu()
-                            if url:
-                                try:
+                        url = view.url_menu()
+                        if url:
+                            try:
+                                if menu == MainMenu.DOWNLOAD[0]:
                                     self.app.download_url(url)
-                                except ValueError as error:
-                                    print(t.error(str(error)))
+                                else:
+                                    self.app.sync_url(url)
+                            except ValueError as error:
+                                print(t.error(str(error)))
                         continue
 
                     elif action == SelectionModeMenu.BACK[0]:
@@ -114,6 +114,9 @@ class Controller:
 
                 elif menu == MainMenu.CONVERT[0]:
                     self.app.flac_to_mp3()
+
+                elif menu == MainMenu.RUN_WATCHER[0]:
+                    self.app.reconcile_library()
                         
             except KeyboardInterrupt:
                 self.app.stop_library_monitoring()
@@ -134,6 +137,8 @@ class Controller:
                 self.app.change_audio_quality()
             elif action == "automatic mp3 conversion":
                 self.app.toggle_mp3_conversion()
+            elif action == "tidekeeper additional settings":
+                self._tidekeeper_settings()
 
     def _default_selection(self):
         while True:
@@ -144,14 +149,9 @@ class Controller:
                 selection = self.playlists.load()
                 print(t.display_selection(selection) if selection else "> no default playlists selected")
             elif action == "change selection":
-                mode = view.selection_mode_menu(False)
-                if mode == SelectionModeMenu.SEARCH[0]:
-                    selected = view.search_menu(self.playlists.names())
-                    selection = [selected] if selected else None
-                elif mode == SelectionModeMenu.SELECT[0]:
-                    selection = view.select_menu(self.playlists.names())
-                else:
-                    continue
+                selection = view.select_menu(
+                    self.playlists.names(), self.playlists.load()
+                )
                 if selection:
                     self.playlists.save(selection)
                     print(t.log("default playlist selection saved"))
@@ -171,7 +171,7 @@ class Controller:
             print(f"> Tidekeeper setting '{action}' will be implemented later")
 
 def main():
-    print("\nSpotidal2u")
+    print(f"\n{t.red('Spotidal')}\n")
     controller = Controller()
     controller.run()
 

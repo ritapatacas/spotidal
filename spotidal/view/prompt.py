@@ -81,9 +81,10 @@ class MainMenu(MenuBase):
     DOWNLOAD = "download", Prompt.LIST
     CONVERT = "convert", Prompt.LIST
     QUIT = "quit", Prompt.LIST
+    RUN_WATCHER = "run watcher (update database)", Prompt.LIST
     SETTINGS = "settings", Prompt.LIST
 
-    MAIN_OPT = [DOWNLOAD, SYNC, CONVERT, SETTINGS, QUIT]
+    MAIN_OPT = [DOWNLOAD, SYNC, CONVERT, RUN_WATCHER, SETTINGS, QUIT]
 
     def __init__(self):
         super().__init__(Prompt.LIST)
@@ -110,12 +111,9 @@ class SettingsMenu(MenuBase):
     SETTINGS_Q = "Settings"
     DOWNLOAD_SETTINGS = "download settings"
     DATABASE_SETTINGS = "database settings"
-    TIDEKEEPER_SETTINGS = "tidekeeper additional settings"
     DEFAULT_SELECTION = "playlists default selection"
-    LOAD = "load selection"
-    SAVE_SELECTION = "save selection"
     BACK = "back"
-    SETTINGS_OPT = [DOWNLOAD_SETTINGS, DATABASE_SETTINGS, TIDEKEEPER_SETTINGS, DEFAULT_SELECTION, LOAD, SAVE_SELECTION, BACK]
+    SETTINGS_OPT = [DOWNLOAD_SETTINGS, DATABASE_SETTINGS, DEFAULT_SELECTION, BACK]
 
     def __init__(self):
         super().__init__(Prompt.LIST)
@@ -140,8 +138,9 @@ class DownloadSettingsMenu(MenuBase):
     DOWNLOAD_DIR = "download directory"
     AUDIO_QUALITY = "audio quality"
     AUTO_MP3 = "automatic mp3 conversion"
+    TIDEKEEPER_SETTINGS = "tidekeeper additional settings"
     BACK = "back"
-    OPTIONS = [DOWNLOAD_DIR, AUDIO_QUALITY, AUTO_MP3, BACK]
+    OPTIONS = [DOWNLOAD_DIR, AUDIO_QUALITY, AUTO_MP3, TIDEKEEPER_SETTINGS, BACK]
 
     def __init__(self):
         super().__init__(Prompt.LIST)
@@ -325,9 +324,10 @@ class SaveSelectionMenu(MenuBase):
 class SelectionModeMenu(MenuBase):
     SELECTION_Q = "How do you want to proceed?"
     SEARCH = "search", Prompt.SEARCH
-    SELECT = "selected", Prompt.LIST
+    SELECT = "new playlist selection", Prompt.LIST
     BACK = "back", Prompt.LIST
     URL = "url"
+    LOAD = "load selection"
     SELECTION_OPT = [SEARCH, SELECT, BACK]
 
     def __init__(self):
@@ -337,7 +337,10 @@ class SelectionModeMenu(MenuBase):
         ]
 
     def display(self, include_url=False):
-        options = ([self.URL] if include_url else []) + self.options
+        options = ([self.URL] if include_url else []) + [self.SEARCH[0], self.SELECT[0]]
+        if include_url:
+            options.append(self.LOAD)
+        options.append(self.BACK[0])
         questions = [
             {
                 "type": "list",
@@ -378,7 +381,7 @@ class SelectMenu(MenuBase):
         super().__init__(Prompt.LIST)
         self.playlists = None
 
-    def display(self, playlists: list):
+    def display(self, playlists: list, selected=None):
         keybindings_select_list = {
             "toggle-all-true": [{"key": "a"}],
             "toggle-all-false": [{"key": "n"}],
@@ -389,6 +392,7 @@ class SelectMenu(MenuBase):
                 "message": self.SELECT_Q,
                 "name": "selected_playlists",
                 "choices": playlists,
+                "default": selected or [],
                 "mandatory": False,
                 "keybindings": BACK_KEYBINDINGS,
             }

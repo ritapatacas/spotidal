@@ -102,9 +102,9 @@ def save_menu():
     if confirm:
         return current_selection
 
-def select_menu(get_remaining_playlists):
+def select_menu(get_remaining_playlists, selected=None):
     select_menu = SelectMenu()
-    result = select_menu.display(get_remaining_playlists)
+    result = select_menu.display(get_remaining_playlists, selected)
     print('view select menu result')
     print(result)
     return result
@@ -159,7 +159,7 @@ def url_menu():
             sys.exit() """
 
 def main():
-    print("\nSpotidal2u")
+    print("\nSpotidal\n")
     setup_menu()
     #run()
 
