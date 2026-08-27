@@ -19,6 +19,7 @@ __all__ = [
     "SearchMenu",
     "SelectMenu",
     "URLMenu",
+    "DefaultSelectionMenu",
     "SaveSelectionMenu",
     "get_string",
     "format_string",
