@@ -1,3 +1,5 @@
+from urllib.parse import urlparse
+
 from spotidal.model import Model
 from ..model.helpers.type import PlaylistReference as playlist
 import spotidal.view.view as view
@@ -8,6 +10,7 @@ from ..model.download import Download
 from ..model.flac_to_mp3 import FlacToMp3
 from ..model.library import MusicLibrary
 from ..model.library_watcher import LibraryWatcher
+from ..view.text import Text as t
 
 
 class ControllerMain:
@@ -28,13 +31,31 @@ class ControllerMain:
     def sync(self, e):
         if isinstance(e, list):
             for p in e:
+                self._start_playlist_job(p)
                 info = playlist.get_info(p)
                 if info and info.get("sp_id"):
                     self._sync.by_sp_id(info["sp_id"])
         else:
+            self._start_playlist_job(e)
             info = playlist.get_info(e)
             if info and info.get("sp_id"):
                 self._sync.by_sp_id(info["sp_id"])
+
+    def _start_playlist_job(self, reference):
+        info = playlist.get_info(reference)
+        name = info["name"] if info else str(reference)
+        print("\n" + t.log(f"playlist '{name}'"))
+
+    def sync_url(self, url):
+        parsed = urlparse(url.strip())
+        parts = [part for part in parsed.path.split("/") if part]
+        if (
+            not parsed.netloc.lower().endswith("open.spotify.com")
+            or len(parts) < 2
+            or parts[0] != "playlist"
+        ):
+            raise ValueError("sync URL must be a Spotify playlist URL")
+        self._sync.by_sp_id(parts[1])
 
     def download(self, e):
         if isinstance(e, list):
@@ -60,8 +81,11 @@ class ControllerMain:
         ).convert()
 
     def reconcile_library(self):
-        if self._library_watcher:
-            self._library_watcher.refresh()
+        if not self._settings.get_database_enabled():
+            print(t.error("database is disabled"))
+            return
+        available = self._library.reconcile_all()
+        print(t.log(f"database updated ({available} location(s) scanned)"))
 
     def stop_library_monitoring(self):
         if self._library_watcher:
@@ -143,3 +167,4 @@ class ControllerMain:
 
 if __name__ == "__main__":
     controller = ControllerMain()
+from urllib.parse import urlparse

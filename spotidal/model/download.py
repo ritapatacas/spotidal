@@ -37,9 +37,12 @@ class Download:
 
         if service == "tidal":
             playlist = self.td_session.playlist(media_id) if media_type == "playlist" else None
-            completed = download(url.strip())
+            track = self.td_session.track(media_id) if media_type == "track" else None
+            completed = download(
+                url.strip(), display_name=track.name if track else None
+            )
             if playlist and completed:
-                MusicLibrary(Files.SETTINGS.load().get("downloadPath", "~/Spotidal2U")).associate_tidal_playlist(playlist, media_id)
+                MusicLibrary(Files.SETTINGS.load().get("downloadPath", "~/Spotidal")).associate_tidal_playlist(playlist, media_id)
             return
         if media_type == "playlist":
             td_playlist = self._sync_playlist(media_id)
@@ -52,7 +55,7 @@ class Download:
                 raise ValueError("Spotify playlist could not be converted to TIDAL")
             completed = download(f"https://tidal.com/playlist/{td_playlist.id}")
             if completed:
-                MusicLibrary(Files.SETTINGS.load().get("downloadPath", "~/Spotidal2U")).associate_tidal_playlist(td_playlist, str(td_playlist.id))
+                MusicLibrary(Files.SETTINGS.load().get("downloadPath", "~/Spotidal")).associate_tidal_playlist(td_playlist, str(td_playlist.id))
             return
         if media_type == "track":
             tracks = [self.sp_session.track(media_id)]
@@ -64,7 +67,10 @@ class Download:
                 spotify_track = self.sp_session.track(spotify_track["id"])
             tidal_track = self._find_tidal_track(spotify_track)
             if tidal_track:
-                download(f"https://tidal.com/track/{tidal_track.id}")
+                download(
+                    f"https://tidal.com/track/{tidal_track.id}",
+                    display_name=spotify_track["name"],
+                )
             else:
                 print(f"> could not find '{spotify_track['name']}' on TIDAL")
 

@@ -1,8 +1,11 @@
 import os
+import json
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
+from queue import Empty, Queue
 from ..helpers.type.file import Files
 from ..library import MusicLibrary
 from ...view.text import Text as t
@@ -16,15 +19,15 @@ QUALITY_PRIORITIES = {
     "High": "High,Normal",
     "Normal": "Normal",
 }
-DEFAULT_DOWNLOAD_PATH = os.path.expanduser("~/Spotidal2U")
+DEFAULT_DOWNLOAD_PATH = os.path.expanduser("~/Spotidal")
+CONVERSION_MESSAGES = Queue()
 
 
-def check_and_install_tidal_dl():
+def check_and_install_tidekeeper():
     try:
         result = subprocess.run(
             ["tidekeeper", "--version"], capture_output=True, text=True
         )
-        print("> tidekeeper installed version", result.stdout)
         if result.returncode != 0:
             raise Exception("> tidekeeper not installed")
     except Exception:
@@ -34,8 +37,25 @@ def check_and_install_tidal_dl():
         )
 
 
+def configure_tidekeeper_formats(settings):
+    config_path = Path(os.path.expanduser("~/.tidal-dl.json"))
+    try:
+        config = json.loads(config_path.read_text()) if config_path.exists() else {}
+        tidekeeper = settings.get("tidekeeper", {})
+        config["albumFolderFormat"] = tidekeeper.get(
+            "albumFolderFormat", "{ArtistName}/{AlbumTitle}"
+        )
+        config["trackFileFormat"] = tidekeeper.get(
+            "trackFileFormat", "{TrackNumber} - {ArtistName} - {TrackTitle}{ExplicitFlag}"
+        )
+        config["usePlaylistFolder"] = False
+        config_path.write_text(json.dumps(config, indent=4))
+    except (OSError, json.JSONDecodeError, TypeError):
+        pass
+
+
 def default_Settings():
-    check_and_install_tidal_dl()
+    check_and_install_tidekeeper()
 
 
 def _remove_partial_files(download_path):
@@ -109,8 +129,28 @@ def _report_downloads(output, download_path, previous_files):
 
     reported_files.update(current_files - previous_files)
     for file_path in sorted(reported_files):
-        print(t.log(f"download complete for {file_path}"))
+        print(t.log(f"download complete {t.grey(str(file_path))}"))
     return sorted(current_files - previous_files)
+
+
+def pop_conversion_messages():
+    messages = []
+    while True:
+        try:
+            messages.append(CONVERSION_MESSAGES.get_nowait())
+        except Empty:
+            return messages
+
+
+def _wait_for_conversion(process, output_file):
+    if process.wait() == 0:
+        CONVERSION_MESSAGES.put(
+            t.log(f"mp3 conversion complete {t.grey(str(output_file))}")
+        )
+    else:
+        CONVERSION_MESSAGES.put(
+            t.error(f"mp3 conversion failed {t.grey(str(output_file))}")
+        )
 
 
 def check_login():
@@ -119,14 +159,16 @@ def check_login():
     subprocess.run(["tidekeeper", "--doctor"])
 
 
-def download_url(url, timeout=240):
-    check_and_install_tidal_dl()
+def download_url(url, timeout=240, display_name=None):
+    check_and_install_tidekeeper()
 
-    print(t.busy("downloading..."))
+    label = f" '{display_name}'" if display_name else ""
+    print(t.busy(f"downloading{label}..."))
 
     # todo check how many tracks the playlist has
 
     settings = Files.SETTINGS.load() or {}
+    configure_tidekeeper_formats(settings)
     command = [
         "tidekeeper",
         "-q",
@@ -178,7 +220,7 @@ def download_url(url, timeout=240):
             for flac_file in completed_files:
                 mp3_file = mp3_root / flac_file.relative_to(flac_root)
                 mp3_file = mp3_file.with_suffix(".mp3")
-                subprocess.Popen(
+                conversion = subprocess.Popen(
                     [
                         sys.executable,
                         "-m",
@@ -187,8 +229,15 @@ def download_url(url, timeout=240):
                         str(mp3_file),
                         str(flac_root.parent),
                         settings.get("databaseLocation"),
-                    ]
+                    ],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
                 )
+                threading.Thread(
+                    target=_wait_for_conversion,
+                    args=(conversion, mp3_file),
+                    daemon=True,
+                ).start()
         if result.returncode != 0:
             print("> tidekeeper failed; see its failed-tracks.txt for retryable tracks")
         return completed_files

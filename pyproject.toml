@@ -32,7 +32,7 @@ tidalapi = ">=0.7.6,<0.8.0"
 tqdm = "^4.66.5"
 typing-extensions = "^4.12.2"
 urllib3 = ">=1.25.4,<2.1"
-wcwidth = "^0.2.13"
+wcwidth = ">=0.3.5,<1.0.0"
 
 [tool.poetry.scripts]
 spotidal = "spotidal.controller.controller:main"

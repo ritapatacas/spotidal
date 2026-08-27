@@ -6,7 +6,7 @@ from .helpers.type.file import Files
 # Tidekeeper's Max tier maps to Tidal's HI_RES output (up to 24 bit, 192 kHz).
 QUALITY_OPTIONS = ["Max", "HiFi", "High", "Normal"]
 DEFAULT_QUALITY = "Max"
-DEFAULT_DOWNLOAD_PATH = "~/Spotidal2U"
+DEFAULT_DOWNLOAD_PATH = "~/Spotidal"
 DEFAULTS = {
     "qualityFallback": "HiFi",
     "autoConvertMp3": True,

@@ -1,3 +1,4 @@
+import threading
 from pathlib import Path
 
 from watchdog.events import FileSystemEventHandler
@@ -23,7 +24,7 @@ class LibraryEventHandler(FileSystemEventHandler):
             and path.resolve().is_relative_to(self.root_path)
         )
 
-    def _import(self, path):
+    def _import(self, path, attempt=0):
         if self._audio(path) and Path(path).is_file():
             try:
                 self.library.import_file(
@@ -31,8 +32,11 @@ class LibraryEventHandler(FileSystemEventHandler):
                     location_name=self.location_name,
                     location_type=self.location_type,
                 )
-            except (OSError, ValueError, KeyError):
-                pass
+            except Exception:
+                if attempt < 5:
+                    retry = threading.Timer(0.5, self._import, (path, attempt + 1))
+                    retry.daemon = True
+                    retry.start()
 
     def _mark_missing(self, path):
         path = Path(path)

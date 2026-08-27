@@ -4,7 +4,7 @@
   "lyrics_file": false,
   "video_download": true,
   "download_delay": true,
-  "download_base_path": "~/Spotidal2U",
+  "download_base_path": "~/Spotidal",
   "quality_audio": "HIGH",
   "quality_video": "480",
   "format_album": "{album_artist}/{album_title}{album_explicit}/{album_track_num} {artist_name} - {track_title}",
