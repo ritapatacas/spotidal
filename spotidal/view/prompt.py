@@ -2,6 +2,9 @@ from enum import Enum
 from InquirerPy import prompt
 
 
+BACK_KEYBINDINGS = {"skip": [{"key": "escape"}]}
+
+
 class Prompt(Enum):
     LIST = "list"
     SEARCH = "fuzzy"
@@ -76,11 +79,10 @@ class MainMenu(MenuBase):
 
     SYNC = "sync", Prompt.LIST
     DOWNLOAD = "download", Prompt.LIST
+    FLAC_TO_MP3 = "flac to mp3", Prompt.LIST
     SETTINGS = "settings", Prompt.LIST
-    LOAD = "load selection", Prompt.LIST
-    SAVE_SELECTION = "save selection", Prompt.CONFIRM
 
-    MAIN_OPT = [SYNC, DOWNLOAD, LOAD, SAVE_SELECTION, SETTINGS]
+    MAIN_OPT = [DOWNLOAD, SYNC, SETTINGS, FLAC_TO_MP3]
 
     def __init__(self):
         super().__init__(Prompt.LIST)
@@ -95,10 +97,12 @@ class MainMenu(MenuBase):
                 "name": "action",
                 "message": self.MAIN_Q,
                 "choices": self.options,
+                "mandatory": False,
+                "keybindings": BACK_KEYBINDINGS,
             }
         ]
         response = prompt(questions)
-        return response["action"]
+        return response.get("action")
 
 
 class SettingsMenu(MenuBase):
@@ -106,7 +110,10 @@ class SettingsMenu(MenuBase):
     DOWNLOAD_DIR = "change download directory"
     DOWNLOAD_QUALITY = "change download quality"
     RESET_SETTINGS = "reset settings"
-    SETTINGS_OPT = [DOWNLOAD_DIR, DOWNLOAD_QUALITY, RESET_SETTINGS]
+    LOAD = "load selection"
+    SAVE_SELECTION = "save selection"
+    BACK = "back"
+    SETTINGS_OPT = [DOWNLOAD_DIR, DOWNLOAD_QUALITY, RESET_SETTINGS, LOAD, SAVE_SELECTION, BACK]
 
     def __init__(self):
         super().__init__(Prompt.LIST)
@@ -119,10 +126,12 @@ class SettingsMenu(MenuBase):
                 "name": "action",
                 "message": self.SETTINGS_Q,
                 "choices": self.options,
+                "mandatory": False,
+                "keybindings": BACK_KEYBINDINGS,
             }
         ]
         response = prompt(questions)
-        return response["action"]
+        return response.get("action")
 
 
 class DownloadDirMenu(MenuBase):
@@ -139,10 +148,12 @@ class DownloadDirMenu(MenuBase):
                 "name": "download_dir",
                 "message": message,
                 "default": current or "",
+                "mandatory": False,
+                "keybindings": BACK_KEYBINDINGS,
             }
         ]
         response = prompt(questions)
-        return response["download_dir"]
+        return response.get("download_dir")
 
 
 class DownloadQualityMenu(MenuBase):
@@ -159,10 +170,12 @@ class DownloadQualityMenu(MenuBase):
                 "name": "quality",
                 "message": message,
                 "choices": qualities,
+                "mandatory": False,
+                "keybindings": BACK_KEYBINDINGS,
             }
         ]
         response = prompt(questions)
-        return response["quality"]
+        return response.get("quality")
 
 
 class SaveSelectionMenu(MenuBase):
@@ -179,23 +192,25 @@ class SaveSelectionMenu(MenuBase):
                 "name": "save_selection",
                 "message": self.SAVE_SELECTION_Q,
                 "default": True,
+                "mandatory": False,
                 "keybindings": {
+                    **BACK_KEYBINDINGS,
                     "confirm": [{"key": "y"}, {"key": "Y"}, {"key": "1"}],
                     "reject": [{"key": "n"}, {"key": "N"}, {"key": "0"}],
                 },
             }
         ]
         response = prompt(questions)
-        return response["save_selection"]
+        return response.get("save_selection")
 
 
 class SelectionModeMenu(MenuBase):
-    SELECTION_Q = "Which playlists?"
+    SELECTION_Q = "How do you want to proceed?"
     SEARCH = "search", Prompt.SEARCH
-    SELECT = "select", Prompt.LIST
-    BY_ID = "by_id", Prompt.INPUT
-    LOAD = "load saved selection"
-    SELECTION_OPT = [SEARCH, SELECT, BY_ID, LOAD]
+    SELECT = "selected", Prompt.LIST
+    BACK = "back", Prompt.LIST
+    URL = "url"
+    SELECTION_OPT = [SEARCH, SELECT, BACK]
 
     def __init__(self):
         super().__init__(Prompt.LIST)
@@ -203,17 +218,38 @@ class SelectionModeMenu(MenuBase):
             opt[0] for opt in self.SELECTION_OPT
         ]
 
-    def display(self):
+    def display(self, include_url=False):
+        options = ([self.URL] if include_url else []) + self.options
         questions = [
             {
                 "type": "list",
                 "name": "action",
                 "message": self.SELECTION_Q,
-                "choices": self.options,
+                "choices": options,
+                "mandatory": False,
+                "keybindings": BACK_KEYBINDINGS,
             }
         ]
         response = prompt(questions)
-        return response["action"]
+        return response.get("action")
+
+
+class URLMenu(MenuBase):
+    def __init__(self):
+        super().__init__(Prompt.INPUT)
+
+    def display(self):
+        questions = [
+            {
+                "type": "input",
+                "name": "url",
+                "message": "TIDAL or Spotify URL",
+                "mandatory": False,
+                "keybindings": BACK_KEYBINDINGS,
+            }
+        ]
+        response = prompt(questions)
+        return response.get("url")
 
 
 class SelectMenu(MenuBase):
@@ -235,12 +271,14 @@ class SelectMenu(MenuBase):
                 "message": self.SELECT_Q,
                 "name": "selected_playlists",
                 "choices": playlists,
+                "mandatory": False,
+                "keybindings": BACK_KEYBINDINGS,
             }
         ]
         response = prompt(questions, keybindings=keybindings_select_list)
-        if not response["selected_playlists"]:
+        if not response.get("selected_playlists"):
             print(self.SELECT_ERR)
-        return response["selected_playlists"]
+        return response.get("selected_playlists")
 
 
 class SearchMenu(MenuBase):
@@ -256,26 +294,12 @@ class SearchMenu(MenuBase):
                 "name": "search_playlists",
                 "choices": playlists,
                 "max_height": "70%",
+                "mandatory": False,
+                "keybindings": BACK_KEYBINDINGS,
             }
         ]
         response = prompt(questions)
-        return response["search_playlists"]
-
-
-class ByIdMenu(MenuBase):
-    def __init__(self):
-        super().__init__(Prompt.INPUT)
-
-    def display(self):
-        questions = [
-            {
-                "type": "input",
-                "name": "playlist_id",
-                "message": "Tell me a spotify playlist id",
-            }
-        ]
-        response = prompt(questions)
-        return response["playlist_id"]
+        return response.get("search_playlists")
 
 
 class ConfirmMenu(MenuBase):
@@ -289,7 +313,9 @@ class ConfirmMenu(MenuBase):
                 "name": "confirm",
                 "message": message,
                 "default": True,
+                "mandatory": False,
                 "keybindings": {
+                    **BACK_KEYBINDINGS,
                     "confirm": [
                         {"key": "y"},
                         {"key": "Y"},
@@ -308,31 +334,4 @@ class ConfirmMenu(MenuBase):
             }
         ]
         response = prompt(questions)
-        return response["confirm"]
-
-
-ID_Q = "Spotify playlist ID to sync"
-ID_ERR = "invalid Spotify playlist ID"
-
-ADD_MORE_Q = "Add more or can we proceed?"
-SAVE_SELECTION_Q = "Save selection?"
-RESET_Q = "Are you sure reset settings?"
-
-SAVED_LOG = "saved"
-LOADED_LOG = "loaded"
-QUIT_LOG = "quitting!"
-MAIN = "main", Prompt.LIST
-SYNC = "sync", Prompt.LIST
-DOWNLOAD = "download", Prompt.LIST
-LOAD = "load saved selection"
-SAVE = "save selection", Prompt.CONFIRM
-SETTINGS = "settings", Prompt.LIST
-MAIN_OPT = [SYNC, DOWNLOAD, LOAD, SAVE, SETTINGS]
-
-SEARCH = "search", Prompt.SEARCH
-SELECT = "select", Prompt.LIST
-BY_ID = "by_id", Prompt.INPUT
-SELECTION_OPT = [SEARCH, SELECT, BY_ID, LOAD]
-
-RESET_SETTINGS = "reset settings"
-SETTINGS_OPT = [RESET_SETTINGS]
+        return response.get("confirm")

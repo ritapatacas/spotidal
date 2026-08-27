@@ -133,8 +133,10 @@ def get_td_session() -> td_api.Session:
                 refresh_token=previous_session["refresh_token"],
             ):
                 return session
+            print(t.error("saved TIDAL session was rejected, opening a new login"))
         except Exception as e:
             print(t.error("error loading previous tidal session \n" + str(e)))
+        return open_td_session()
     else:
         print(t.error("no previous tidal session found, opening new session"))
         return open_td_session()

@@ -5,6 +5,7 @@ import spotidal.view.view as view
 from ..model.settings import Settings
 from ..model.sync import Sync
 from ..model.download import Download
+from ..model.flac_to_mp3 import FlacToMp3
 
 
 class ControllerMain:
@@ -33,6 +34,15 @@ class ControllerMain:
         else:
             self.sync(e)
             self._download.by_td_id(playlist.get_info(e)["td_id"])
+
+    def download_url(self, url):
+        self._download.by_url(url)
+
+    def get_download_dir(self):
+        return self._settings.get_download_dir()
+
+    def flac_to_mp3(self):
+        FlacToMp3(self._settings.get_download_dir()).convert()
 
     def reset_sp_session(self):
         sp_credentials = view.setup_menu()

@@ -19,9 +19,12 @@ class Sync:
         sync_playlists_wrapper(
             self.sessions["sp"], self.sessions["td"], [td_playlist], self.sp_credentials
         )
+        return td_playlist
 
     def by_sp_id(self, sp_id):
-        list_handler(sp_id, self._sync_playlist)
+        if isinstance(sp_id, str):
+            return self._sync_playlist(sp_id)
+        return list_handler(sp_id, self._sync_playlist)
 
     def saved_selection(self):
         selection = Files.SELECTION.load()

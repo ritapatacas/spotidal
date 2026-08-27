@@ -47,6 +47,10 @@ class Text:
         return str(Colors.RED) + " ! " + str(Colors.WHITE) + text
 
     @staticmethod
+    def warning(text):
+        return str(Colors.YELLOW) + " ! " + str(Colors.WHITE) + text
+
+    @staticmethod
     def display_selection(selection):
         start = (
             str(Colors.GREEN) + "> " + str(Colors.WHITE) + "current selection [ " + str(Colors.PURPLE)

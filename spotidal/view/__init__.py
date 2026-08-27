@@ -5,7 +5,7 @@ from .prompt import (
     SettingsMenu,
     SearchMenu,
     SelectMenu,
-    ByIdMenu,
+    URLMenu,
     SaveSelectionMenu,
 )
 
@@ -18,7 +18,7 @@ __all__ = [
     "SettingsMenu",
     "SearchMenu",
     "SelectMenu",
-    "ByIdMenu",
+    "URLMenu",
     "SaveSelectionMenu",
     "get_string",
     "format_string",

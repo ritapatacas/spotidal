@@ -12,9 +12,9 @@ from spotidal.view.prompt import (
     DownloadQualityMenu,
     SearchMenu,
     SelectMenu,
-    ByIdMenu,
     SaveSelectionMenu,
     ConfirmMenu,
+    URLMenu,
 )
 
 #app = Controller()
@@ -58,9 +58,9 @@ def confirm_selection_menu():
     )
     return response
 
-def selection_mode_menu():
+def selection_mode_menu(include_url=False):
     selection_mode_menu = SelectionModeMenu()
-    action = selection_mode_menu.display()
+    action = selection_mode_menu.display(include_url)
     return action
 
 def search_menu(get_remaining_playlists):
@@ -82,12 +82,8 @@ def select_menu(get_remaining_playlists):
     print(result)
     return result
 
-def by_id_menu(get_remaining_playlists):
-    by_id_menu = ByIdMenu()
-    result = by_id_menu.display(get_remaining_playlists)
-    print('view by id menu result')
-    print(result)
-    return result
+def url_menu():
+    return URLMenu().display()
 
 """ def run():
     global current_selection

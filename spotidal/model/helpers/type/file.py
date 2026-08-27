@@ -7,7 +7,6 @@ from tidalapi import playlist
 
 class Path(Enum):
     USR = '~/.config/spotidal/'
-    TD_DL_NG = '~/.config/tidal_dl_ng/'
 
 
 class Ext(Enum):
@@ -18,7 +17,7 @@ class Ext(Enum):
 
 class Files(Enum):
     DEFAULT_SETTINGS = Path.USR, 'default_settings', Ext.JSON
-    SETTINGS = Path.TD_DL_NG, 'settings', Ext.JSON
+    SETTINGS = Path.USR, 'settings', Ext.JSON
     PLAYLISTS = Path.USR, 'playlists', Ext.JSON
     PARSED_PLAYLISTS = Path.USR, 'parsed_playlists', Ext.YML
     SELECTION = Path.USR, 'selection', Ext.JSON
