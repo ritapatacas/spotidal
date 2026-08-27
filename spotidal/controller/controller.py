@@ -10,6 +10,7 @@ from spotidal.view.setup import get_credentials
 from spotidal.view.prompt import (
     MainMenu,
     SelectionModeMenu,
+    SettingsMenu,
 )
 
 
@@ -40,8 +41,12 @@ class Controller:
             try:
                 menu = view.main_menu()
                 if menu == MainMenu.SETTINGS[0]:
-                    # todo add settings menu
-                    if view.settings_menu():
+                    action = view.settings_menu()
+                    if action == SettingsMenu.DOWNLOAD_DIR:
+                        self.app.change_download_dir()
+                    elif action == SettingsMenu.DOWNLOAD_QUALITY:
+                        self.app.change_download_quality()
+                    elif action == SettingsMenu.RESET_SETTINGS:
                         self.app.reset_settings()
                     
                 elif menu == MainMenu.LOAD[0]:

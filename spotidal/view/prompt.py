@@ -103,8 +103,10 @@ class MainMenu(MenuBase):
 
 class SettingsMenu(MenuBase):
     SETTINGS_Q = "Settings"
+    DOWNLOAD_DIR = "change download directory"
+    DOWNLOAD_QUALITY = "change download quality"
     RESET_SETTINGS = "reset settings"
-    SETTINGS_OPT = [RESET_SETTINGS]
+    SETTINGS_OPT = [DOWNLOAD_DIR, DOWNLOAD_QUALITY, RESET_SETTINGS]
 
     def __init__(self):
         super().__init__(Prompt.LIST)
@@ -121,6 +123,46 @@ class SettingsMenu(MenuBase):
         ]
         response = prompt(questions)
         return response["action"]
+
+
+class DownloadDirMenu(MenuBase):
+    def __init__(self):
+        super().__init__(Prompt.INPUT)
+
+    def display(self, current: str = None):
+        message = "Download directory"
+        if current:
+            message += f" (current: {current})"
+        questions = [
+            {
+                "type": "input",
+                "name": "download_dir",
+                "message": message,
+                "default": current or "",
+            }
+        ]
+        response = prompt(questions)
+        return response["download_dir"]
+
+
+class DownloadQualityMenu(MenuBase):
+    def __init__(self):
+        super().__init__(Prompt.LIST)
+
+    def display(self, qualities: list, current: str = None):
+        message = "Download quality"
+        if current:
+            message += f" (current: {current})"
+        questions = [
+            {
+                "type": "list",
+                "name": "quality",
+                "message": message,
+                "choices": qualities,
+            }
+        ]
+        response = prompt(questions)
+        return response["quality"]
 
 
 class SaveSelectionMenu(MenuBase):

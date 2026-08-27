@@ -39,6 +39,22 @@ class ControllerMain:
         self.model.setup_credentials(sp_credentials)
         self.model.open_sp_session()
     
+    def change_download_dir(self):
+        new_dir = view.download_dir_menu(self._settings.get_download_dir())
+        if new_dir:
+            saved = self._settings.set_download_dir(new_dir)
+            print(f"> download directory set to {saved}")
+
+    def change_download_quality(self):
+        from ..model.settings import QUALITY_OPTIONS
+
+        quality = view.download_quality_menu(
+            QUALITY_OPTIONS, self._settings.get_download_quality()
+        )
+        if quality:
+            self._settings.set_download_quality(quality)
+            print(f"> download quality set to {quality}")
+
     def reset_settings(self):
         self.reset_sp_session()
         self._settings.reset_settings()

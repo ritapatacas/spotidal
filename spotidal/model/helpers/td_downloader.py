@@ -6,7 +6,6 @@ from ...view.text import Text as t
 
 def check_and_install_tidal_dl():
     try:
-        # pip install --upgrade tidal-dl-ng first?
         result = subprocess.run(
             ["tidal-dl-ng", "--version"], capture_output=True, text=True
         )
@@ -14,9 +13,11 @@ def check_and_install_tidal_dl():
         if result.returncode != 0:
             raise Exception("> tidal-dl-ng not installed")
     except Exception:
+        # the original tidal-dl-ng package was removed from PyPI;
+        # tidal-dl-ng-for-dj is a maintained fork providing the same CLI
         print("> tidal-dl-ng not found, installing...")
         subprocess.check_call(
-            [sys.executable, "-m", "pip", "install", "--upgrade", "tidal-dl-ng"]
+            [sys.executable, "-m", "pip", "install", "--upgrade", "tidal-dl-ng-for-dj"]
         )
 
 

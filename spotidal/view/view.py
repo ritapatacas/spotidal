@@ -8,6 +8,8 @@ from spotidal.view.prompt import (
     MainMenu,
     SelectionModeMenu,
     SettingsMenu,
+    DownloadDirMenu,
+    DownloadQualityMenu,
     SearchMenu,
     SelectMenu,
     ByIdMenu,
@@ -42,6 +44,12 @@ def settings_menu():
     settings_menu = SettingsMenu()
     action = settings_menu.display()
     return action
+
+def download_dir_menu(current=None):
+    return DownloadDirMenu().display(current)
+
+def download_quality_menu(qualities, current=None):
+    return DownloadQualityMenu().display(qualities, current)
 
 def confirm_selection_menu():
     confirm_menu = ConfirmMenu()
