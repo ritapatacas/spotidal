@@ -26,7 +26,7 @@ CREATE TABLE IF NOT EXISTS files (
     file_id INTEGER PRIMARY KEY, track_id TEXT NOT NULL REFERENCES tracks(track_id),
     location_id TEXT NOT NULL REFERENCES locations(location_id), format TEXT NOT NULL,
     path TEXT NOT NULL, filename TEXT NOT NULL, bitrate INTEGER, sample_rate INTEGER,
-    bit_depth INTEGER, file_size INTEGER, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+    bit_depth INTEGER, file_size INTEGER, missing_at TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
     UNIQUE(location_id, path)
 );
 CREATE TABLE IF NOT EXISTS playlists (
@@ -80,9 +80,13 @@ def _year(value):
 
 
 class MusicLibrary:
-    def __init__(self, root_path):
+    def __init__(self, root_path, database_path=None):
         self.root_path = Path(root_path).expanduser().resolve()
-        self.database_path = self.root_path / "database" / "library.db"
+        self.database_path = (
+            Path(database_path).expanduser().resolve()
+            if database_path
+            else self.root_path / "database" / "library.db"
+        )
         self.database_path.parent.mkdir(parents=True, exist_ok=True)
         self._migrate()
 
@@ -95,6 +99,11 @@ class MusicLibrary:
     def _migrate(self):
         with self._connect() as connection:
             connection.executescript(SCHEMA)
+            columns = {
+                row[1] for row in connection.execute("PRAGMA table_info(files)")
+            }
+            if "missing_at" not in columns:
+                connection.execute("ALTER TABLE files ADD COLUMN missing_at TEXT")
             connection.execute(
                 "INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES(1, ?)",
                 (_now(),),
@@ -145,8 +154,13 @@ class MusicLibrary:
             ).fetchone()
             if location_id:
                 location_id = location_id[0]
+                location_root = Path(connection.execute(
+                    "SELECT root_path FROM locations WHERE location_id = ?",
+                    (location_id,),
+                ).fetchone()[0])
             else:
                 location_id = uuid7()
+                location_root = self.root_path
                 connection.execute(
                     "INSERT INTO locations VALUES (?, ?, ?, ?, ?, ?)",
                     (location_id, location_name, str(self.root_path), location_type, now, now),
@@ -172,14 +186,70 @@ class MusicLibrary:
                     "INSERT INTO tracks(track_id,title,artist,album,album_artist,isrc,spotify_id,tidal_id,year,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
                     (track_id, metadata["title"], metadata["artist"], metadata["album"], metadata["album_artist"], metadata["isrc"], spotify_id, tidal_id, metadata["year"], now, now),
                 )
-            relative_path = file_path.relative_to(self.root_path).as_posix()
+            relative_path = file_path.relative_to(location_root).as_posix()
             connection.execute(
-                "INSERT INTO files(track_id,location_id,format,path,filename,file_size,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(location_id,path) DO UPDATE SET track_id=excluded.track_id,updated_at=excluded.updated_at",
-                (track_id, location_id, file_path.suffix.lower().lstrip("."), relative_path, file_path.name, file_path.stat().st_size, now, now),
+                "INSERT INTO files(track_id,location_id,format,path,filename,file_size,missing_at,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(location_id,path) DO UPDATE SET track_id=excluded.track_id,filename=excluded.filename,file_size=excluded.file_size,missing_at=NULL,updated_at=excluded.updated_at",
+                (track_id, location_id, file_path.suffix.lower().lstrip("."), relative_path, file_path.name, file_path.stat().st_size, None, now, now),
             )
+            existing_file = connection.execute(
+                "SELECT file_id FROM files WHERE track_id=? AND location_id=? AND format=? AND path<>?",
+                (track_id, location_id, file_path.suffix.lower().lstrip("."), relative_path),
+            ).fetchone()
+            if existing_file:
+                connection.execute(
+                    "DELETE FROM files WHERE file_id = (SELECT file_id FROM files WHERE location_id=? AND path=?)",
+                    (location_id, relative_path),
+                )
+                connection.execute(
+                    "UPDATE files SET path=?, filename=?, file_size=?, missing_at=NULL, updated_at=? WHERE file_id=?",
+                    (relative_path, file_path.name, file_path.stat().st_size, now, existing_file[0]),
+                )
         if metadata["track_id"] != track_id:
             self.write_track_id(file_path, track_id)
         return track_id
+
+    def locations(self):
+        with self._connect() as connection:
+            return connection.execute(
+                "SELECT location_id, name, root_path, type FROM locations"
+            ).fetchall()
+
+    def reconcile_location(self, location_id):
+        with self._connect() as connection:
+            location = connection.execute(
+                "SELECT name, root_path, type FROM locations WHERE location_id=?", (location_id,)
+            ).fetchone()
+            tracked = connection.execute(
+                "SELECT path FROM files WHERE location_id=?", (location_id,)
+            ).fetchall()
+        if not location:
+            return False
+        name, root_path, location_type = location
+        root = Path(root_path).expanduser()
+        if not root.is_dir():
+            return False
+        actual = {
+            path.relative_to(root).as_posix(): path
+            for extension in ("*.flac", "*.mp3")
+            for path in root.rglob(extension)
+            if not path.name.startswith("._")
+        }
+        for path in actual.values():
+            try:
+                self.import_file(path, location_name=name, location_type=location_type)
+            except (OSError, ValueError, KeyError):
+                continue
+        missing = {path for (path,) in tracked} - actual.keys()
+        if missing:
+            with self._connect() as connection:
+                connection.executemany(
+                    "UPDATE files SET missing_at=CURRENT_TIMESTAMP WHERE location_id=? AND path=? AND missing_at IS NULL",
+                    [(location_id, path) for path in missing],
+                )
+        return True
+
+    def reconcile_all(self):
+        return sum(self.reconcile_location(row[0]) for row in self.locations())
 
     def upsert_playlist(self, name, spotify_playlist_id=None, tidal_playlist_id=None):
         now = _now()
@@ -196,6 +266,13 @@ class MusicLibrary:
             connection.executemany(
                 "INSERT OR IGNORE INTO playlist_tracks(playlist_id,track_id) VALUES(?,?)",
                 [(playlist_id, track_id) for track_id in set(track_ids)],
+            )
+
+    def mark_missing(self, location_id, path):
+        with self._connect() as connection:
+            connection.execute(
+                "UPDATE files SET missing_at=CURRENT_TIMESTAMP WHERE location_id=? AND path=?",
+                (location_id, path),
             )
 
     def associate_tidal_playlist(self, playlist, tidal_playlist_id):

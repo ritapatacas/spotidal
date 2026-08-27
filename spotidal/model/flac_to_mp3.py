@@ -6,7 +6,7 @@ from pathlib import Path
 from .library import MusicLibrary
 
 
-def convert_file(flac_file, output_file, library_root=None):
+def convert_file(flac_file, output_file, library_root=None, database_path=None):
     flac_file = Path(flac_file)
     output_file = Path(output_file)
     if output_file.exists():
@@ -44,7 +44,7 @@ def convert_file(flac_file, output_file, library_root=None):
         print(f"> failed to convert {flac_file}: {error}")
         return False
     if library_root:
-        library = MusicLibrary(library_root)
+        library = MusicLibrary(library_root, database_path)
         track_id = library.import_file(flac_file)
         library.write_track_id(output_file, track_id)
         library.import_file(output_file)
@@ -53,11 +53,12 @@ def convert_file(flac_file, output_file, library_root=None):
 
 
 class FlacToMp3:
-    def __init__(self, download_path):
+    def __init__(self, download_path, flac_path=None, mp3_path=None, database_path=None):
         base_path = Path(download_path).expanduser()
-        self.library = MusicLibrary(base_path)
-        self.flac_path = base_path / "flac"
-        self.mp3_path = base_path / "mp3"
+        self.library = MusicLibrary(base_path, database_path)
+        self.database_path = database_path
+        self.flac_path = Path(flac_path or base_path / "flac").expanduser()
+        self.mp3_path = Path(mp3_path or base_path / "mp3").expanduser()
 
     def convert(self):
         if not self.flac_path.is_dir():
@@ -82,7 +83,9 @@ class FlacToMp3:
                 self.library.import_file(output_file)
                 skipped += 1
                 continue
-            if convert_file(flac_file, output_file, self.library.root_path):
+            if convert_file(
+                flac_file, output_file, self.library.root_path, self.database_path
+            ):
                 converted += 1
             else:
                 failed += 1
@@ -94,7 +97,8 @@ class FlacToMp3:
 
 
 if __name__ == "__main__":
-    if len(sys.argv) not in (3, 4):
-        raise SystemExit("usage: python -m spotidal.model.flac_to_mp3 FLAC_FILE MP3_FILE [LIBRARY_ROOT]")
-    library_root = sys.argv[3] if len(sys.argv) == 4 else None
-    convert_file(sys.argv[1], sys.argv[2], library_root)
+    if len(sys.argv) not in (3, 4, 5):
+        raise SystemExit("usage: python -m spotidal.model.flac_to_mp3 FLAC_FILE MP3_FILE [LIBRARY_ROOT] [DATABASE_PATH]")
+    library_root = sys.argv[3] if len(sys.argv) >= 4 else None
+    database_path = sys.argv[4] if len(sys.argv) == 5 else None
+    convert_file(sys.argv[1], sys.argv[2], library_root, database_path)

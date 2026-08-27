@@ -139,10 +139,13 @@ def download_url(url, timeout=240):
         url,
     ]
     environment = os.environ.copy()
-    download_path = settings.get("downloadPath") or environment.get(
-        "TIDEKEEPER_DOWNLOAD_PATH", DEFAULT_DOWNLOAD_PATH
+    download_path = settings.get("flacDirectory") or os.path.join(
+        settings.get("downloadPath") or environment.get(
+            "TIDEKEEPER_DOWNLOAD_PATH", DEFAULT_DOWNLOAD_PATH
+        ),
+        "flac",
     )
-    download_path = os.path.join(os.path.abspath(os.path.expanduser(download_path)), "flac")
+    download_path = os.path.abspath(os.path.expanduser(download_path))
     environment["TIDEKEEPER_DOWNLOAD_PATH"] = download_path
     effective_download_path = environment.get("TIDEKEEPER_DOWNLOAD_PATH")
     if effective_download_path:
@@ -162,13 +165,16 @@ def download_url(url, timeout=240):
         completed_files = _report_downloads(
             output, effective_download_path, previous_files
         )
-        library = MusicLibrary(Path(effective_download_path).parent)
+        library = MusicLibrary(
+            Path(effective_download_path).parent,
+            settings.get("databaseLocation"),
+        )
         tidal_track_id = _tidal_track_id(url)
         for flac_file in completed_files:
             library.import_file(flac_file, tidal_id=tidal_track_id)
         if result.returncode == 0 and settings.get("autoConvertMp3", True):
             flac_root = Path(effective_download_path)
-            mp3_root = flac_root.parent / "mp3"
+            mp3_root = Path(settings.get("mp3Directory", flac_root.parent / "mp3")).expanduser()
             for flac_file in completed_files:
                 mp3_file = mp3_root / flac_file.relative_to(flac_root)
                 mp3_file = mp3_file.with_suffix(".mp3")
@@ -180,6 +186,7 @@ def download_url(url, timeout=240):
                         str(flac_file),
                         str(mp3_file),
                         str(flac_root.parent),
+                        settings.get("databaseLocation"),
                     ]
                 )
         if result.returncode != 0:
