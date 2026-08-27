@@ -65,7 +65,12 @@ class Controller:
                     action = view.selection_mode_menu(menu == MainMenu.DOWNLOAD[0])
 
                     if action == SelectionModeMenu.SEARCH[0]:
-                        selected = view.search_menu(self.playlists.not_selected())
+                        playlists = (
+                            self.playlists.names()
+                            if menu == MainMenu.DOWNLOAD[0]
+                            else self.playlists.not_selected()
+                        )
+                        selected = view.search_menu(playlists)
                         if not selected:
                             continue
                         self.model.current_selection.add(selected)
