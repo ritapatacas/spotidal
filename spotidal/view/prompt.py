@@ -79,10 +79,11 @@ class MainMenu(MenuBase):
 
     SYNC = "sync", Prompt.LIST
     DOWNLOAD = "download", Prompt.LIST
-    FLAC_TO_MP3 = "flac to mp3", Prompt.LIST
+    CONVERT = "convert", Prompt.LIST
+    QUIT = "quit", Prompt.LIST
     SETTINGS = "settings", Prompt.LIST
 
-    MAIN_OPT = [DOWNLOAD, SYNC, SETTINGS, FLAC_TO_MP3]
+    MAIN_OPT = [DOWNLOAD, SYNC, CONVERT, SETTINGS, QUIT]
 
     def __init__(self):
         super().__init__(Prompt.LIST)
@@ -107,13 +108,14 @@ class MainMenu(MenuBase):
 
 class SettingsMenu(MenuBase):
     SETTINGS_Q = "Settings"
-    DOWNLOAD_DIR = "change download directory"
-    DOWNLOAD_QUALITY = "change download quality"
-    RESET_SETTINGS = "reset settings"
+    DOWNLOAD_SETTINGS = "download settings"
+    DATABASE_SETTINGS = "database settings"
+    TIDEKEEPER_SETTINGS = "tidekeeper additional settings"
+    DEFAULT_SELECTION = "playlists default selection"
     LOAD = "load selection"
     SAVE_SELECTION = "save selection"
     BACK = "back"
-    SETTINGS_OPT = [DOWNLOAD_DIR, DOWNLOAD_QUALITY, RESET_SETTINGS, LOAD, SAVE_SELECTION, BACK]
+    SETTINGS_OPT = [DOWNLOAD_SETTINGS, DATABASE_SETTINGS, TIDEKEEPER_SETTINGS, DEFAULT_SELECTION, LOAD, SAVE_SELECTION, BACK]
 
     def __init__(self):
         super().__init__(Prompt.LIST)
@@ -134,12 +136,91 @@ class SettingsMenu(MenuBase):
         return response.get("action")
 
 
+class DownloadSettingsMenu(MenuBase):
+    DOWNLOAD_DIR = "download directory"
+    AUDIO_QUALITY = "audio quality"
+    AUTO_MP3 = "automatic mp3 conversion"
+    BACK = "back"
+    OPTIONS = [DOWNLOAD_DIR, AUDIO_QUALITY, AUTO_MP3, BACK]
+
+    def __init__(self):
+        super().__init__(Prompt.LIST)
+
+    def display(self):
+        questions = [{
+            "type": "list", "name": "action", "message": "Download settings",
+            "choices": self.OPTIONS, "mandatory": False,
+            "keybindings": BACK_KEYBINDINGS,
+        }]
+        return prompt(questions).get("action")
+
+
+class DatabaseSettingsMenu(MenuBase):
+    ENABLED = "database enabled"
+    RUN_WATCHER = "run watcher (update database)"
+    DATABASE_PATH = "database location path"
+    FLAC_DIR = "flac directory"
+    MP3_DIR = "mp3 directory"
+    OTHER_LOCATIONS = "other locations"
+    BACK = "back"
+    OPTIONS = [ENABLED, RUN_WATCHER, DATABASE_PATH, FLAC_DIR, MP3_DIR, OTHER_LOCATIONS, BACK]
+
+    def __init__(self):
+        super().__init__(Prompt.LIST)
+
+    def display(self):
+        questions = [{
+            "type": "list", "name": "action", "message": "Database settings",
+            "choices": self.OPTIONS, "mandatory": False,
+            "keybindings": BACK_KEYBINDINGS,
+        }]
+        return prompt(questions).get("action")
+
+
+class TidekeeperSettingsMenu(MenuBase):
+    OPTIONS = [
+        "includeEP", "saveCovers", "language", "lyricFile", "apiKeyIndex",
+        "showProgress", "showTrackInfo", "saveAlbumInfo", "multiThread",
+        "downloadDelay", "requestIntervalSeconds", "adaptiveRateLimit",
+        "albumFolderFormat", "trackFileFormat", "back",
+    ]
+
+    def __init__(self):
+        super().__init__(Prompt.LIST)
+
+    def display(self):
+        questions = [{
+            "type": "list", "name": "action", "message": "Tidekeeper additional settings",
+            "choices": self.OPTIONS, "mandatory": False,
+            "keybindings": BACK_KEYBINDINGS,
+        }]
+        return prompt(questions).get("action")
+
+
+class DefaultSelectionMenu(MenuBase):
+    VIEW = "view selection"
+    CHANGE = "change selection"
+    BACK = "back"
+    OPTIONS = [VIEW, CHANGE, BACK]
+
+    def __init__(self):
+        super().__init__(Prompt.LIST)
+
+    def display(self):
+        questions = [{
+            "type": "list", "name": "action",
+            "message": "Playlists default selection",
+            "choices": self.OPTIONS, "mandatory": False,
+            "keybindings": BACK_KEYBINDINGS,
+        }]
+        return prompt(questions).get("action")
+
+
 class DownloadDirMenu(MenuBase):
     def __init__(self):
         super().__init__(Prompt.INPUT)
 
-    def display(self, current: str = None):
-        message = "Download directory"
+    def display(self, current: str = None, message="Download directory"):
         if current:
             message += f" (current: {current})"
         questions = [
@@ -176,6 +257,43 @@ class DownloadQualityMenu(MenuBase):
         ]
         response = prompt(questions)
         return response.get("quality")
+
+
+class AudioQualityMenu(MenuBase):
+    OPTIONS = ["Max", "HiFi", "High", "Normal"]
+    FALLBACK_OPTIONS = ["None", *OPTIONS]
+
+    def __init__(self):
+        super().__init__(Prompt.LIST)
+
+    def display(self, target=None, fallback=None):
+        questions = [
+            {
+                "type": "list", "name": "target", "message": "Target audio quality",
+                "choices": self.OPTIONS, "default": target or "Max",
+                "mandatory": False, "keybindings": BACK_KEYBINDINGS,
+            },
+            {
+                "type": "list", "name": "fallback", "message": "Fallback quality",
+                "choices": self.FALLBACK_OPTIONS, "default": fallback or "HiFi",
+                "mandatory": False, "keybindings": BACK_KEYBINDINGS,
+            },
+        ]
+        return prompt(questions)
+
+
+class ToggleMenu(MenuBase):
+    def __init__(self):
+        super().__init__(Prompt.LIST)
+
+    def display(self, message, enabled=True):
+        questions = [{
+            "type": "list", "name": "value", "message": message,
+            "choices": ["enable", "disable"],
+            "default": "enable" if enabled else "disable",
+            "mandatory": False, "keybindings": BACK_KEYBINDINGS,
+        }]
+        return prompt(questions).get("value")
 
 
 class SaveSelectionMenu(MenuBase):

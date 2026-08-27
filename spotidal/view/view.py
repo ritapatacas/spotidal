@@ -10,6 +10,12 @@ from spotidal.view.prompt import (
     SettingsMenu,
     DownloadDirMenu,
     DownloadQualityMenu,
+    AudioQualityMenu,
+    DownloadSettingsMenu,
+    DatabaseSettingsMenu,
+    TidekeeperSettingsMenu,
+    DefaultSelectionMenu,
+    ToggleMenu,
     SearchMenu,
     SelectMenu,
     SaveSelectionMenu,
@@ -50,6 +56,27 @@ def download_dir_menu(current=None):
 
 def download_quality_menu(qualities, current=None):
     return DownloadQualityMenu().display(qualities, current)
+
+def audio_quality_menu(target=None, fallback=None):
+    return AudioQualityMenu().display(target, fallback)
+
+def download_settings_menu():
+    return DownloadSettingsMenu().display()
+
+def database_settings_menu():
+    return DatabaseSettingsMenu().display()
+
+def tidekeeper_settings_menu():
+    return TidekeeperSettingsMenu().display()
+
+def default_selection_menu():
+    return DefaultSelectionMenu().display()
+
+def toggle_menu(message, enabled=True):
+    return ToggleMenu().display(message, enabled)
+
+def path_menu(current=None, message="Path"):
+    return DownloadDirMenu().display(current, message)
 
 def confirm_selection_menu():
     confirm_menu = ConfirmMenu()
