@@ -51,6 +51,8 @@ async def _fetch_all_from_sp_in_chunks(fetch_function: Callable) -> List[dict]:
         extra_results = await atqdm.gather(
             *[asyncio.to_thread(fetch_function, offset) for offset in offsets],
             desc=t.busy("fetching additional data chunks"),
+            ncols=70,
+            bar_format="{desc}: {percentage:3.0f}%|{bar:20}| {n_fmt}/{total_fmt}",
         )
         for r in extra_results:
             output.extend(

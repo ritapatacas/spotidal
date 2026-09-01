@@ -4,6 +4,7 @@ import sys
 from pathlib import Path
 
 from .library import MusicLibrary
+from ..view.text import Text as t
 
 
 def convert_file(flac_file, output_file, library_root=None, database_path=None):
@@ -41,14 +42,14 @@ def convert_file(flac_file, output_file, library_root=None, database_path=None):
         output_file.unlink(missing_ok=True)
         errors = result.stderr.strip().splitlines()
         error = errors[-1] if errors else "unknown ffmpeg error"
-        print(f"> failed to convert {flac_file}: {error}")
+        print(t.log(f"failed to convert {flac_file}: {error}"))
         return False
     if library_root:
         library = MusicLibrary(library_root, database_path)
         track_id = library.import_file(flac_file)
         library.write_track_id(output_file, track_id)
         library.import_file(output_file)
-    print(f"> mp3 conversion complete for {output_file}")
+    print(t.log(f"mp3 conversion complete for {output_file}"))
     return True
 
 
@@ -62,10 +63,10 @@ class FlacToMp3:
 
     def convert(self):
         if not self.flac_path.is_dir():
-            print(f"> FLAC directory not found: {self.flac_path}")
+            print(t.log(f"FLAC directory not found: {self.flac_path}"))
             return
         if not shutil.which("ffmpeg"):
-            print("> ffmpeg not found; install ffmpeg to convert FLAC files")
+            print(t.log("ffmpeg not found; install ffmpeg to convert FLAC files"))
             return
 
         converted = 0

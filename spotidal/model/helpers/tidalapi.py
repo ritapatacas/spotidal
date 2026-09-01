@@ -1,5 +1,6 @@
 import asyncio
 import math
+import time
 import tidalapi
 from typing import List
 from tqdm import tqdm
@@ -53,16 +54,23 @@ def add_multiple_tracks_to_playlist(
             offset += count
             progress.update(count)
 
-async def _get_all_chunks(url, session, parser, params={}) -> List[tidalapi.Track]:
+async def _get_all_chunks(url, session, parser, params={}, show_progress=True) -> List[tidalapi.Track]:
     """
     Helper function to get all items from a Tidal endpoint in parallel
     The main library doesn't provide the total number of items or expose the raw json, so use this wrapper instead
     """
 
     def _make_request(offset: int = 0):
-        new_params = params
-        new_params["offset"] = offset
-        return session.request.map_request(url, params=new_params)
+        new_params = {**params, "offset": offset}
+        last_error = None
+        for attempt in range(3):
+            try:
+                return session.request.map_request(url, params=new_params)
+            except Exception as error:
+                last_error = error
+                if attempt < 2:
+                    time.sleep(2 ** attempt)
+        raise last_error
 
     first_chunk_raw = _make_request()
     limit = first_chunk_raw["limit"]
@@ -71,19 +79,27 @@ async def _get_all_chunks(url, session, parser, params={}) -> List[tidalapi.Trac
 
     if len(items) < total:
         offsets = [limit * n for n in range(1, math.ceil(total / limit))]
-        extra_results = await atqdm.gather(
-            *[
-                asyncio.to_thread(
-                    lambda offset: session.request.map_json(
-                        _make_request(offset), parse=parser
-                    ),
-                    offset,
-                )
-                for offset in offsets
-            ],
-            desc=t.busy("fetching additional data chunks"),
-            bar_format=f"{progress_color}{{l_bar}}{{bar}}| {{n_fmt}}/{{total_fmt}} ",
-        )
+        chunk_requests = [
+            asyncio.to_thread(
+                lambda offset: session.request.map_json(
+                    _make_request(offset), parse=parser
+                ),
+                offset,
+            )
+            for offset in offsets
+        ]
+        if show_progress:
+            extra_results = await atqdm.gather(
+                *chunk_requests,
+                desc=t.busy("fetching additional data chunks"),
+                ncols=70,
+                bar_format=(
+                    f"{progress_color}{{desc}}: {{percentage:3.0f}}%|"
+                    "{bar:20}| {n_fmt}/{total_fmt}"
+                ),
+            )
+        else:
+            extra_results = await asyncio.gather(*chunk_requests)
         for extra_result in extra_results:
             items.extend(extra_result)
     return items
@@ -111,7 +127,7 @@ async def get_all_playlists(
     user: tidalapi.User, chunk_size: int = 10
 ) -> List[tidalapi.Playlist]:
     """Get all user playlists from Tidal in chunks"""
-    print(t.busy(f"loading playlists from Tidal user"))
+    tqdm.write(t.busy(f"loading playlists from Tidal user"))
     params = {
         "limit": chunk_size,
     }
@@ -123,16 +139,19 @@ async def get_all_playlists(
     )
 
 async def get_all_playlist_tracks(
-    playlist: tidalapi.Playlist, chunk_size: int = 20
+    playlist: tidalapi.Playlist, chunk_size: int = 20, show_log: bool = True,
+    show_progress: bool = True,
 ) -> List[tidalapi.Track]:
     """Get all tracks from tidal playlist in chunks"""
     params = {
         "limit": chunk_size,
     }
-    print(t.busy(f"loading tracks from tidal playlist '{playlist.name}'"))
+    if show_log:
+        print("\n" + t.busy(f"loading tracks from tidal playlist '{playlist.name}'"))
     return await _get_all_chunks(
         f"{playlist._base_url%playlist.id}/tracks",
         session=playlist.session,
         parser=playlist.session.parse_track,
         params=params,
+        show_progress=show_progress,
     )

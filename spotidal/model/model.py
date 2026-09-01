@@ -3,6 +3,7 @@ from ..model.helpers.sync.playlists_handler import get_td_playlists
 from ..model.helpers.utils import fetch_parsed_playlists
 from ..model.helpers.type.file import Files
 from ..view.text import Text as t
+from .helpers.td_downloader import login_tidekeeper, refresh_tidekeeper_token
 
 
 class Model:
@@ -21,7 +22,7 @@ class Model:
         sp_id = self.sessions["sp"].me()["id"]
         td_id = self.sessions["td"].user.id
 
-        return "spotify user " + sp_id + " / tidal " + str(td_id)
+        return "spotify user " + sp_id + "\ntidal user " + str(td_id)
         
     def get_user_playlists(self):
         self.user_playlists = self.sessions["sp"].current_user_playlists()["items"]
@@ -68,6 +69,38 @@ class Model:
         if not td:
             return False
         return td
+
+    def refresh_td_session(self):
+        session = self.sessions["td"]
+        try:
+            credentials = refresh_tidekeeper_token()
+            if credentials:
+                session.access_token = credentials["access_token"]
+                session.refresh_token = credentials["refresh_token"]
+                auth.save_td_session(session)
+                return True
+            if session.refresh_token:
+                refreshed = session.token_refresh(session.refresh_token)
+                if refreshed:
+                    auth.save_td_session(session)
+                    return True
+        except Exception as error:
+            print(t.error(
+                f"TIDAL session refresh failed ({type(error).__name__}): {error}"
+            ))
+
+        print(t.warning("TIDAL refresh token rejected; opening a tidekeeper login"))
+        try:
+            credentials = login_tidekeeper()
+        except Exception as error:
+            print(t.error(
+                f"TIDAL login failed ({type(error).__name__}): {error}"
+            ))
+            return False
+        session.access_token = credentials["access_token"]
+        session.refresh_token = credentials["refresh_token"]
+        auth.save_td_session(session)
+        return True
 
 if __name__ == "__main__":
     model = Model()

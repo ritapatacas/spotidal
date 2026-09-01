@@ -4,6 +4,7 @@ import spotipy
 import tidalapi
 import time
 import traceback
+from ....view.text import Text as t
 
 async def repeat_on_request_error(function, *args, remaining=5, **kwargs):
     # utility to repeat calling the function up to 5 times if an exception is thrown
@@ -15,20 +16,20 @@ async def repeat_on_request_error(function, *args, remaining=5, **kwargs):
         spotipy.exceptions.SpotifyException,
     ) as e:
         if remaining:
-            print(f"> {str(e)} occurred, retrying {remaining} times")
+            print(t.log(f"{str(e)} occurred, retrying {remaining} times"))
         else:
-            print(f"> {str(e)} could not be recovered")
+            print(t.log(f"{str(e)} could not be recovered"))
 
         if (
             isinstance(e, requests.exceptions.RequestException)
             and not e.response is None
         ):
-            print(f"> response message: {e.response.text}")
-            print(f"> response headers: {e.response.headers}")
+            print(t.log(f"response message: {e.response.text}"))
+            print(t.log(f"response headers: {e.response.headers}"))
 
         if not remaining:
-            print("> aborting sync")
-            print(f"> the following arguments were provided\n\n {str(args)}")
+            print(t.log("aborting sync"))
+            print(t.log(f"the following arguments were provided\n\n {str(args)}"))
             print(traceback.format_exc())
             sys.exit(1)
         # sleep variable length of time depending on retry number

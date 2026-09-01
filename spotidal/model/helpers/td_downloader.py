@@ -1,13 +1,25 @@
 import os
 import json
+import re
+import select
 import subprocess
 import sys
+import termios
 import threading
 import time
+import tty
+import webbrowser
 from pathlib import Path
 from queue import Empty, Queue
+from tqdm import tqdm
 from ..helpers.type.file import Files
 from ..library import MusicLibrary
+from ..normalize_audio import (
+    BACKUP_DIR_NAME,
+    CONVERTIBLE_EXTENSIONS,
+    archive_original,
+    convert_to_flac,
+)
 from ...view.text import Text as t
 
 
@@ -19,8 +31,20 @@ QUALITY_PRIORITIES = {
     "High": "High,Normal",
     "Normal": "Normal",
 }
+_KNOWN_AUDIO_EXTENSION = re.compile(
+    r"\.(flac|mp3|" + "|".join(ext.lstrip(".") for ext in CONVERTIBLE_EXTENSIONS) + r")$",
+    re.IGNORECASE,
+)
 DEFAULT_DOWNLOAD_PATH = os.path.expanduser("~/Spotidal")
 CONVERSION_MESSAGES = Queue()
+TIDEKEEPER_SETUP_LOCK = threading.Lock()
+DATABASE_IMPORT_LOCK = threading.Lock()
+ACCESS_TOKEN_LOG_LOCK = threading.Lock()
+ACCESS_TOKEN_LOGGED = False
+
+
+class TidalSessionStaleError(RuntimeError):
+    """Raised when TIDAL rejects the saved session's API client."""
 
 
 def check_and_install_tidekeeper():
@@ -31,7 +55,7 @@ def check_and_install_tidekeeper():
         if result.returncode != 0:
             raise Exception("> tidekeeper not installed")
     except Exception:
-        print("> tidekeeper not found, installing...")
+        print(t.log("tidekeeper not found, installing..."))
         subprocess.check_call(
             [sys.executable, "-m", "pip", "install", "--upgrade", "tidekeeper"]
         )
@@ -54,20 +78,34 @@ def configure_tidekeeper_formats(settings):
         pass
 
 
+def configure_tidekeeper_progress():
+    try:
+        from tidal_dl.paths import PATHS
+        from tidal_dl.settings import SETTINGS
+
+        SETTINGS.read(PATHS.getProfilePath())
+        SETTINGS.showProgress = True
+        SETTINGS.multiThread = False
+        SETTINGS.save()
+    except Exception:
+        pass
+
+
 def default_Settings():
     check_and_install_tidekeeper()
 
 
 def _remove_partial_files(download_path):
     if not download_path:
-        return
+        return 0
     root = Path(os.path.expanduser(download_path))
     if not root.is_dir():
-        return
+        return 0
+    removed_parts = 0
     for _ in range(5):
         partials = list(root.rglob("*.part.parts"))
         if not partials:
-            return
+            return removed_parts
         for partial in partials:
             try:
                 if partial.is_dir():
@@ -83,15 +121,17 @@ def _remove_partial_files(download_path):
                             except OSError:
                                 pass
                     os.rmdir(partial)
+                    removed_parts += 1
                 else:
                     partial.unlink()
             except OSError:
                 pass
         time.sleep(0.25)
+    return removed_parts
 
 
 def clean_tmp(download_path):
-    _remove_partial_files(download_path)
+    return _remove_partial_files(download_path)
 
 
 def _flac_files(download_path):
@@ -102,7 +142,42 @@ def _flac_files(download_path):
         file_path
         for file_path in root.rglob("*.flac")
         if not file_path.name.startswith("._")
+        and ".tmp." not in file_path.name
+        and ".part" not in file_path.name
     }
+
+
+def _stray_audio_files(download_path):
+    root = Path(download_path)
+    if not root.is_dir():
+        return set()
+    return {
+        file_path
+        for extension in CONVERTIBLE_EXTENSIONS
+        for file_path in root.rglob(f"*{extension}")
+        if not file_path.name.startswith("._")
+        and ".tmp." not in file_path.name
+        and BACKUP_DIR_NAME not in file_path.relative_to(root).parts
+    }
+
+
+def _convert_stray_audio_files(download_path, previous_stray_files):
+    # TIDAL sometimes serves a non-FLAC fallback (e.g. m4a) when the
+    # requested quality isn't available lossless; normalize it in place so
+    # the flac directory only ever holds .flac files. Scoped to files that
+    # appeared during this download, so it never touches unrelated
+    # pre-existing stray files elsewhere in the library.
+    root = Path(download_path)
+    new_stray_files = _stray_audio_files(download_path) - previous_stray_files
+    for file_path in new_stray_files:
+        output_file = file_path.with_suffix(".flac")
+        if output_file.exists():
+            continue
+        if convert_to_flac(file_path, output_file):
+            archive_original(file_path, root)
+            tqdm.write("\n" + t.log_grey(
+                f"converted {file_path.name} -> {output_file.name}"
+            ))
 
 
 def _tidal_track_id(url):
@@ -114,28 +189,87 @@ def _tidal_track_id(url):
     return parts[index + 1] if index + 1 < len(parts) else None
 
 
+def _format_access_token_message(message):
+    match = re.search(
+        r"access token good for (?:(\d+) hours?,? )?(\d+) minutes?"
+        r"(?:, \d+ seconds?)?\.?$",
+        message,
+    )
+    if not match:
+        return message
+    hours, minutes = match.groups()
+    duration = f"{hours}h " if hours else ""
+    return f"access token good for {duration}{minutes}min"
+
+
+def _normalize_match_text(text):
+    return re.sub(r"[^\w]+", "", text.casefold())
+
+
+def _title_matches_file(title, file_path):
+    stem = file_path.stem.casefold()
+    if title.casefold() in stem:
+        return True
+    # Filenames get punctuation (quotes, colons, "?", "'", accents-adjacent
+    # symbols) stripped by tidekeeper, but the reported title doesn't — so
+    # fall back to a punctuation-insensitive comparison.
+    normalized_title = _normalize_match_text(title)
+    return bool(normalized_title) and normalized_title in _normalize_match_text(stem)
+
+
 def _report_downloads(output, download_path, previous_files):
+    global ACCESS_TOKEN_LOGGED
     current_files = _flac_files(download_path)
+    # Titles reported by tidekeeper can diverge from the sanitized filename it
+    # writes to disk (quotes, colons, etc. get stripped), which breaks substring
+    # matching below. When exactly one new file shows up for a genuinely
+    # downloaded (non-skip) track, trust that unambiguous new file instead.
+    new_files = current_files - previous_files
     reported_files = set()
+    skipped_files = set()
+    skipped_titles = []
     for line in output.splitlines():
         if "AccessToken" in line:
-            print(t.warning(line.split("] ", 1)[-1]))
+            with ACCESS_TOKEN_LOG_LOCK:
+                if not ACCESS_TOKEN_LOGGED:
+                    message = line.split("] ", 1)[-1].replace("AccessToken", "access token")
+                    message = _format_access_token_message(message)
+                    tqdm.write("\n" + t.busy(message + "\n"))
+                    ACCESS_TOKEN_LOGGED = True
         elif "[ERR]" in line:
-            print(t.error(line.split("] ", 1)[-1]))
+            tqdm.write(t.error(line.split("] ", 1)[-1]))
         elif "[SUCCESS]" in line:
-            title = line.split("] ", 1)[-1].split(" (skip:", 1)[0].strip()
-            print(t.log(f"downloaded track {title}"))
+            message = line.split("] ", 1)[-1]
+            title = message.split(" (skip:", 1)[0].strip()
+            # For some skips tidekeeper reports the on-disk filename (with
+            # extension) instead of the clean track title.
+            title = _KNOWN_AUDIO_EXTENSION.sub("", title)
+            if " (skip:" in message:
+                skipped_titles.append(title)
+                # A file may exist on disk but not yet be indexed in the DB.
+                matches = {
+                    file_path
+                    for file_path in current_files
+                    if _title_matches_file(title, file_path)
+                }
+                reported_files.update(matches)
+                skipped_files.update(matches)
+                continue
+            if len(new_files) == 1:
+                reported_files.update(new_files)
+                continue
             matches = [
                 file_path
                 for file_path in current_files
-                if title.lower() in file_path.stem.lower()
+                if _title_matches_file(title, file_path)
             ]
             reported_files.update(matches)
 
-    reported_files.update(current_files - previous_files)
-    for file_path in sorted(reported_files):
-        print(t.log(f"download complete {t.grey(str(file_path))}"))
-    return sorted(current_files - previous_files)
+    return sorted(reported_files), [
+        line.split("] ", 1)[-1].split(" (skip:", 1)[0].strip()
+        for line in output.splitlines()
+        if "[SUCCESS]" in line and " (skip:" not in line
+    ], skipped_titles, skipped_files
 
 
 def pop_conversion_messages():
@@ -147,10 +281,13 @@ def pop_conversion_messages():
             return messages
 
 
-def _wait_for_conversion(process, output_file):
+def _wait_for_conversion(process, output_file, output_root):
     if process.wait() == 0:
         CONVERSION_MESSAGES.put(
-            t.log(f"mp3 conversion complete {t.grey(str(output_file))}")
+            t.log(
+                "mp3 conversion complete "
+                f"{t.grey(str(output_file.relative_to(output_root)))}"
+            )
         )
     else:
         CONVERSION_MESSAGES.put(
@@ -158,7 +295,7 @@ def _wait_for_conversion(process, output_file):
         )
 
 
-def _run_tidekeeper(command, environment, timeout):
+def _run_tidekeeper(command, environment, timeout, progress_callback=None):
     output_queue = Queue()
     process = subprocess.Popen(
         command,
@@ -170,33 +307,87 @@ def _run_tidekeeper(command, environment, timeout):
     )
 
     def read_output():
-        for line in process.stdout:
-            output_queue.put(line)
+        buffer = []
+        while True:
+            character = process.stdout.read(1)
+            if not character:
+                break
+            if character in "\r\n":
+                if buffer:
+                    output_queue.put("".join(buffer) + "\n")
+                    buffer = []
+            else:
+                buffer.append(character)
+        if buffer:
+            output_queue.put("".join(buffer) + "\n")
         output_queue.put(None)
 
     threading.Thread(target=read_output, daemon=True).start()
     output = []
     deadline = time.monotonic() + timeout
     finished = False
-    while time.monotonic() < deadline:
-        try:
-            line = output_queue.get(timeout=0.1)
-            if line is None:
-                finished = True
-                break
-            output.append(line)
-            if "[DL Track] name=" in line:
-                print(t.busy(f"downloading '{line.split('[DL Track] name=', 1)[1].strip()}'..."))
-        except Empty:
-            if process.poll() is not None:
-                finished = True
-                break
-    if not finished:
-        process.kill()
-        process.wait()
-        raise subprocess.TimeoutExpired(command, timeout)
-    process.wait()
-    return process.returncode, "".join(output)
+    cancelled = False
+    token_expired = False
+    session_stale = False
+    terminal_state = None
+    if sys.stdin.isatty():
+        terminal_state = termios.tcgetattr(sys.stdin.fileno())
+        tty.setcbreak(sys.stdin.fileno())
+    try:
+        while time.monotonic() < deadline:
+            if terminal_state and select.select([sys.stdin], [], [], 0)[0]:
+                if sys.stdin.read(1) == "\x1b":
+                    termios.tcsetattr(sys.stdin.fileno(), termios.TCSADRAIN, terminal_state)
+                    answer = input("Do you want to stop current downloading? (y/n) ")
+                    if answer.strip().lower() in ("y", "yes"):
+                        process.terminate()
+                        process.wait(timeout=5)
+                        cancelled = True
+                        break
+                    tty.setcbreak(sys.stdin.fileno())
+            try:
+                line = output_queue.get(timeout=0.1)
+                if line is None:
+                    finished = True
+                    break
+                progress_match = re.search(r"(\d+(?:\.\d+)?)%\|", line)
+                if progress_match:
+                    if progress_callback:
+                        progress_callback(int(progress_match.group(1)))
+                    continue
+                output.append(line)
+                if "Expired access token. Attempting to refresh it." in line:
+                    process.terminate()
+                    try:
+                        process.wait(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        process.kill()
+                        process.wait()
+                    token_expired = True
+                    break
+                if "saved login session references an API client that no longer exists" in line:
+                    process.terminate()
+                    try:
+                        process.wait(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        process.kill()
+                        process.wait()
+                    session_stale = True
+                    break
+                if "[DL Track] name=" in line:
+                    tqdm.write(t.busy(f"downloading '{line.split('[DL Track] name=', 1)[1].strip()}'..."))
+            except Empty:
+                if process.poll() is not None:
+                    finished = True
+                    break
+        if not finished and not cancelled and not token_expired and not session_stale:
+            process.kill()
+            process.wait()
+            raise subprocess.TimeoutExpired(command, timeout)
+        return process.returncode, "".join(output), cancelled, token_expired, session_stale
+    finally:
+        if terminal_state:
+            termios.tcsetattr(sys.stdin.fileno(), termios.TCSADRAIN, terminal_state)
 
 
 def check_login():
@@ -205,16 +396,89 @@ def check_login():
     subprocess.run(["tidekeeper", "--doctor"])
 
 
-def download_url(url, timeout=3600, display_name=None):
-    check_and_install_tidekeeper()
+def refresh_tidekeeper_token():
+    """Refresh the token stored by tidekeeper and return its credentials."""
+    try:
+        from tidal_dl import apiKey
+        from tidal_dl.paths import PATHS
+        from tidal_dl.settings import SETTINGS, TOKEN
+        from tidal_dl.tidal import TIDAL_API
 
-    label = f" '{display_name}'" if display_name else ""
-    print(t.busy(f"downloading{label}..."))
+        SETTINGS.read(PATHS.getProfilePath())
+        TOKEN.read(PATHS.getTokenPath())
+        if not apiKey.isItemValid(SETTINGS.apiKeyIndex):
+            SETTINGS.apiKeyIndex = apiKey.getDefaultIndex()
+            SETTINGS.save()
+        TIDAL_API.apiKey = apiKey.getItem(SETTINGS.apiKeyIndex)
+        if not TOKEN.refreshToken or not TIDAL_API.refreshAccessToken(TOKEN.refreshToken):
+            print(t.warning("tidekeeper token refresh was rejected"))
+            return None
+        TOKEN.accessToken = TIDAL_API.key.accessToken
+        TOKEN.refreshToken = TIDAL_API.key.refreshToken
+        TOKEN.expiresAfter = time.time() + int(TIDAL_API.key.expiresIn)
+        TOKEN.save()
+        return {
+            "access_token": TOKEN.accessToken,
+            "refresh_token": TOKEN.refreshToken,
+        }
+    except Exception as error:
+        print(t.error(
+            f"tidekeeper token refresh failed ({type(error).__name__}): {error}"
+        ))
+        return None
+
+
+def login_tidekeeper():
+    """Authenticate using tidekeeper's configured OAuth client."""
+    from tidal_dl import apiKey
+    from tidal_dl.paths import PATHS
+    from tidal_dl.settings import SETTINGS, TOKEN
+    from tidal_dl.tidal import TIDAL_API
+
+    SETTINGS.read(PATHS.getProfilePath())
+    TOKEN.read(PATHS.getTokenPath())
+    if not apiKey.isItemValid(SETTINGS.apiKeyIndex):
+        SETTINGS.apiKeyIndex = apiKey.getDefaultIndex()
+        SETTINGS.save()
+    TIDAL_API.apiKey = apiKey.getItem(SETTINGS.apiKeyIndex)
+    tqdm.write(t.log(
+        f"using tidekeeper OAuth client {SETTINGS.apiKeyIndex} "
+        f"({TIDAL_API.apiKey.get('platform', 'unknown')})"
+    ))
+
+    verification_url = TIDAL_API.getDeviceCode()
+    tqdm.write(t.log(f"login with the webbrowser '{verification_url}'"))
+    webbrowser.open(verification_url)
+    started = time.monotonic()
+    while time.monotonic() - started < TIDAL_API.key.authCheckTimeout:
+        if TIDAL_API.checkAuthStatus():
+            TOKEN.userid = TIDAL_API.key.userId
+            TOKEN.countryCode = TIDAL_API.key.countryCode
+            TOKEN.accessToken = TIDAL_API.key.accessToken
+            TOKEN.refreshToken = TIDAL_API.key.refreshToken
+            TOKEN.expiresAfter = time.time() + int(TIDAL_API.key.expiresIn)
+            TOKEN.save()
+            return {
+                "access_token": TOKEN.accessToken,
+                "refresh_token": TOKEN.refreshToken,
+            }
+        time.sleep(TIDAL_API.key.authCheckInterval + 1)
+    raise TimeoutError("tidekeeper OAuth login timed out")
+
+
+def download_url(
+    url, timeout=300, display_name=None, cleanup_partials=True, return_titles=False,
+    refresh_callback=None, reauth_callback=None, progress_callback=None,
+):
+    with TIDEKEEPER_SETUP_LOCK:
+        check_and_install_tidekeeper()
 
     # todo check how many tracks the playlist has
 
     settings = Files.SETTINGS.load() or {}
-    configure_tidekeeper_formats(settings)
+    with TIDEKEEPER_SETUP_LOCK:
+        configure_tidekeeper_formats(settings)
+        configure_tidekeeper_progress()
     command = [
         "tidekeeper",
         "-q",
@@ -239,20 +503,82 @@ def download_url(url, timeout=3600, display_name=None):
     if effective_download_path:
         command[1:1] = ["-o", effective_download_path]
     previous_files = _flac_files(effective_download_path)
+    previous_stray_files = _stray_audio_files(effective_download_path)
 
     try:
-        return_code, output = _run_tidekeeper(command, environment, timeout)
-        _remove_partial_files(effective_download_path)
-        completed_files = _report_downloads(
+        for refresh_attempt in range(2):
+            return_code, output, cancelled, token_expired, session_stale = _run_tidekeeper(
+                command, environment, timeout, progress_callback
+            )
+            if (not token_expired and not session_stale) or refresh_attempt:
+                break
+            if session_stale:
+                raise TidalSessionStaleError(
+                    "TIDAL session is stale; go to Settings > "
+                    "refresh TIDAL access token before continuing"
+                )
+            else:
+                tqdm.write(t.busy("access token expired; refreshing before continuing"))
+                callback = refresh_callback
+            _remove_partial_files(effective_download_path)
+            try:
+                refreshed = callback and callback()
+            except Exception:
+                refreshed = False
+            if not refreshed:
+                tqdm.write(t.error(
+                    "unable to renew TIDAL session"
+                    if session_stale else "unable to refresh TIDAL access token"
+                ))
+                return None
+            tqdm.write(t.log(
+                "TIDAL session renewed; retrying download"
+                if session_stale else "TIDAL access token refreshed; retrying download"
+            ))
+        if cleanup_partials:
+            _remove_partial_files(effective_download_path)
+        _convert_stray_audio_files(effective_download_path, previous_stray_files)
+        completed_files, reported_titles, skipped_titles, skipped_files = _report_downloads(
             output, effective_download_path, previous_files
         )
-        library = MusicLibrary(
-            Path(effective_download_path).parent,
-            settings.get("databaseLocation"),
-        )
-        tidal_track_id = _tidal_track_id(url)
-        for flac_file in completed_files:
-            library.import_file(flac_file, tidal_id=tidal_track_id)
+        if (reported_titles or skipped_titles) and not completed_files:
+            tqdm.write("\n" + t.warning(
+                "could not match reported track(s) to a file on disk; "
+                "database metadata was not updated for: "
+                + ", ".join(reported_titles + skipped_titles)
+            ))
+        linked_existing = False
+        try:
+            # SQLite supports concurrent readers, but serializing imports avoids
+            # write-lock contention when several download batches finish together.
+            with DATABASE_IMPORT_LOCK:
+                library = MusicLibrary(
+                    Path(effective_download_path).parent,
+                    settings.get("databaseLocation"),
+                )
+                tidal_track_id = _tidal_track_id(url)
+                for flac_file in completed_files:
+                    for attempt in range(3):
+                        try:
+                            local_track_id = library.import_file(
+                                flac_file, tidal_id=tidal_track_id
+                            )
+                            if tidal_track_id and flac_file in skipped_files:
+                                linked_existing = True
+                            break
+                        except Exception as error:
+                            if attempt == 2:
+                                tqdm.write(t.error(
+                                    "unable to index downloaded track "
+                                    f"{t.grey(str(error))}"
+                                ))
+                            else:
+                                time.sleep(attempt + 1)
+        except Exception as error:
+            tqdm.write(t.error(
+                "unable to initialize local database "
+                f"{t.grey(str(error))}"
+            ))
         if return_code == 0 and settings.get("autoConvertMp3", True):
             flac_root = Path(effective_download_path)
             mp3_root = Path(settings.get("mp3Directory", flac_root.parent / "mp3")).expanduser()
@@ -274,19 +600,35 @@ def download_url(url, timeout=3600, display_name=None):
                 )
                 threading.Thread(
                     target=_wait_for_conversion,
-                    args=(conversion, mp3_file),
+                    args=(conversion, mp3_file, mp3_root),
                     daemon=True,
                 ).start()
-        if return_code != 0:
-            print("> tidekeeper failed; see its failed-tracks.txt for retryable tracks")
-        return completed_files
-    except subprocess.TimeoutExpired:
-        _remove_partial_files(effective_download_path)
-        print(
-            f"> timed out after {timeout} seconds.\n> please go to settings > download troubleshooting"
+        if cancelled:
+            tqdm.write(t.log("download cancelled"))
+            return None
+        if return_code != 0 and not (
+            (reported_titles or skipped_titles) and "[ERR]" not in output
+        ):
+            failed_tracks = Path(effective_download_path) / "failed-tracks.txt"
+            tqdm.write(
+                f"{t.red('!!')} tidekeeper failed; see "
+                f"{t.grey(str(failed_tracks))} for retryable tracks"
+            )
+            return None
+        return (
+            (completed_files, reported_titles, skipped_titles, linked_existing)
+            if return_titles else completed_files
         )
-        return []
+    except subprocess.TimeoutExpired:
+        if cleanup_partials:
+            _remove_partial_files(effective_download_path)
+        failed_tracks = Path(effective_download_path) / "failed-tracks.txt"
+        tqdm.write(
+            f"{t.red('!')} download timed out after {timeout} seconds; "
+            f"error saved to {t.grey(str(failed_tracks))}"
+        )
+        return None
 
 
-def download_playlist(playlist_id, timeout=240):
+def download_playlist(playlist_id, timeout=300):
     download_url(f"https://tidal.com/browse/playlist/{playlist_id}", timeout)

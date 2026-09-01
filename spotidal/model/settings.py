@@ -23,6 +23,9 @@ DEFAULTS = {
         "showTrackInfo": True,
         "saveAlbumInfo": True,
         "multiThread": True,
+        "batchSize": 50,
+        "parallelBatches": 2,
+        "downloadTimeoutSeconds": 300,
         "downloadDelay": False,
         "requestIntervalSeconds": 1,
         "adaptiveRateLimit": True,
@@ -62,6 +65,11 @@ class Settings:
         for key, value in DEFAULTS.items():
             if key not in settings:
                 settings[key] = value
+                changed = True
+        tidekeeper = settings.setdefault("tidekeeper", {})
+        for key, value in DEFAULTS["tidekeeper"].items():
+            if key not in tidekeeper:
+                tidekeeper[key] = value
                 changed = True
         if "flacDirectory" not in settings:
             settings["flacDirectory"] = os.path.join(

@@ -1,5 +1,12 @@
+import asyncio
+import os
+import re
+import threading
+from pathlib import Path
 from urllib.parse import urlparse
 
+import tidalapi
+from tqdm import tqdm
 from spotidal.model import Model
 from ..model.helpers.type import PlaylistReference as playlist
 import spotidal.view.view as view
@@ -8,42 +15,114 @@ from ..model.settings import Settings
 from ..model.sync import Sync
 from ..model.download import Download
 from ..model.flac_to_mp3 import FlacToMp3
+from ..model.normalize_audio import NormalizeToFlac
 from ..model.library import MusicLibrary
 from ..model.library_watcher import LibraryWatcher
-from ..model.helpers.td_downloader import clean_tmp
+from ..model.helpers.sync.playlists_handler import get_td_playlists_wrapper
+from ..model.helpers.tidalapi import get_all_playlist_tracks
+from ..model.helpers.type.file import Files
+from ..model.helpers.td_downloader import (
+    TidalSessionStaleError,
+    check_login,
+    clean_tmp,
+)
 from ..view.text import Text as t
+
+
+def _normalize_for_match(text):
+    text = re.sub(r"\(feat[^)]*\)", "", text or "", flags=re.IGNORECASE)
+    text = re.sub(r"[^\w]+", " ", text)
+    return " ".join(text.casefold().split())
+
+
+def _format_track(candidate):
+    artists = ", ".join(a.name for a in (getattr(candidate, "artists", None) or []))
+    name = getattr(candidate, "full_name", None) or candidate.name
+    return f"{name} — {artists}" if artists else name
+
+
+def _split_artists(text):
+    parts = re.split(r",|&|/| feat\.| ft\.| x | and ", text or "", flags=re.IGNORECASE)
+    return [part.strip() for part in parts if part.strip()]
 
 
 class ControllerMain:
     def __init__(self, model: Model):
         self.model = model
         self._settings = Settings()
-        self._library = MusicLibrary(
-            self._settings.get_download_dir(), self._settings.get_database_path()
-        )
-        self._library.reconcile_all()
+        self._library = None
+        self._library_error = None
+        self._startup_warnings = []
+        if self._settings.get_database_enabled():
+            try:
+                self._library = MusicLibrary(
+                    self._settings.get_download_dir(), self._settings.get_database_path()
+                )
+                # Do not block the first menu while scanning the whole library.
+                threading.Thread(
+                    target=self._library.reconcile_all,
+                    daemon=True,
+                ).start()
+            except Exception as error:
+                self._library_error = error
+                self._startup_warnings.append(
+                    "local directory unavailable; db features are disabled"
+                )
         self._library_watcher = None
-        if self._settings.get_database_enabled() and self._settings.get_watcher_enabled():
-            self._library_watcher = LibraryWatcher(self._library)
-            self._library_watcher.start()
+        if (
+            self._library
+            and self._settings.get_database_enabled()
+            and self._settings.get_watcher_enabled()
+        ):
+            try:
+                self._library_watcher = LibraryWatcher(self._library)
+                self._library_watcher.start()
+            except Exception as error:
+                self._library_watcher = None
+                self._startup_warnings.append(
+                    f"unable to start local library monitor: {error}"
+                )
         self._sync = Sync(self.model.sessions)
         self._download = Download(self.model.sessions)
+
+    def get_startup_warnings(self):
+        return self._startup_warnings
+
+    def _playlist_info(self, reference):
+        info = playlist.get_info(reference)
+        if info is None:
+            self.model.get_parsed_playlists()
+            info = playlist.get_info(reference)
+        return info
+
+    def _require_local_directory(self, path=None, settings_area="Download settings"):
+        path = Path(path or self._settings.get_download_dir()).expanduser()
+        candidate = path
+        while not candidate.exists() and candidate != candidate.parent:
+            candidate = candidate.parent
+        if not candidate.is_dir() or not os.access(candidate, os.W_OK):
+            print(t.warning(
+                "local directory is unavailable; configure it in "
+                f"{t.b('Settings')} > {t.b(settings_area)}"
+            ))
+            return False
+        return True
 
     def sync(self, e):
         if isinstance(e, list):
             for p in e:
                 self._start_playlist_job(p)
-                info = playlist.get_info(p)
+                info = self._playlist_info(p)
                 if info and info.get("sp_id"):
                     self._sync.by_sp_id(info["sp_id"])
         else:
             self._start_playlist_job(e)
-            info = playlist.get_info(e)
+            info = self._playlist_info(e)
             if info and info.get("sp_id"):
                 self._sync.by_sp_id(info["sp_id"])
 
     def _start_playlist_job(self, reference):
-        info = playlist.get_info(reference)
+        info = self._playlist_info(reference)
         name = info["name"] if info else str(reference)
         print("\n" + t.log(f"playlist '{name}'"))
 
@@ -59,21 +138,56 @@ class ControllerMain:
         self._sync.by_sp_id(parts[1])
 
     def download(self, e):
+        if not self._require_local_directory():
+            return
         if isinstance(e, list):
+            playlist_ids = []
             for p in e:
-                self.sync(p)
-                self._download.by_td_id(playlist.get_info(p)["td_id"])
+                info = self._playlist_info(p)
+                if info and info.get("td_id"):
+                    playlist_ids.append(info["td_id"])
+            if playlist_ids:
+                try:
+                    if len(playlist_ids) == 1:
+                        self._download.by_td_id(playlist_ids[0])
+                    else:
+                        self._download.by_td_ids(playlist_ids)
+                except TidalSessionStaleError:
+                    raise
+                except Exception as error:
+                    print(t.error(f"unable to download playlists {t.grey(str(error))}"))
         else:
-            self.sync(e)
-            self._download.by_td_id(playlist.get_info(e)["td_id"])
+            info = self._playlist_info(e)
+            if info and info.get("td_id"):
+                try:
+                    self._download.by_td_id(info["td_id"])
+                except TidalSessionStaleError:
+                    raise
+                except Exception as error:
+                    print(t.error(
+                        f"unable to download playlist '{info['name']}' "
+                        f"{t.grey(str(error))}"
+                    ))
 
     def download_url(self, url):
+        if not self._require_local_directory():
+            return
         self._download.by_url(url)
 
     def get_download_dir(self):
         return self._settings.get_download_dir()
 
+    def refresh_td_session(self):
+        refreshed = self.model.refresh_td_session()
+        if refreshed:
+            self._download.td_session = self.model.sessions["td"]
+        return refreshed
+
     def flac_to_mp3(self):
+        if not self._require_local_directory() or not self._require_local_directory(
+            self._settings.get_database_path()
+        ):
+            return
         FlacToMp3(
             self._settings.get_download_dir(),
             self._settings.get_flac_dir(),
@@ -81,20 +195,243 @@ class ControllerMain:
             self._settings.get_database_path(),
         ).convert()
 
+    def normalize_to_flac(self):
+        if not self._require_local_directory() or not self._require_local_directory(
+            self._settings.get_database_path()
+        ):
+            return
+        NormalizeToFlac(
+            self._settings.get_download_dir(),
+            self._settings.get_flac_dir(),
+            self._settings.get_database_path(),
+        ).convert()
+
     def reconcile_library(self):
         if not self._settings.get_database_enabled():
             print(t.error("database is disabled"))
             return
-        available = self._library.reconcile_all()
-        print(t.log(f"database updated ({available} location(s) scanned)"))
+        if not self._library:
+            self._require_local_directory(
+                self._settings.get_database_path(), "Database settings"
+            )
+            return
+        with tqdm(desc=t.busy("scanning local files"), unit="file") as progress:
+            changes = self._library.reconcile_all(on_progress=progress.update)
+        print(t.log(
+            "database updated "
+            f"({changes['added']} added, "
+            f"{changes['restored']} restored, "
+            f"{changes['missing']} marked missing)"
+        ))
+
+    def fill_missing_database_data(self):
+        if not self._settings.get_database_enabled():
+            print(t.error("database is disabled"))
+            return
+        if not self._library or not self.model.sessions:
+            print(t.error("TIDAL session or local database is unavailable"))
+            return
+        purged_orphans = self._library.purge_orphan_tracks()
+        if purged_orphans:
+            print(t.log(
+                f"removed {purged_orphans} orphaned track record(s) with no local file"
+            ))
+        repair_stats = self._library.repair_unknown_artists()
+        if repair_stats["total_unknown"]:
+            print(t.log(
+                f"unknown artist: {repair_stats['total_unknown']} track(s) total, "
+                f"{repair_stats['with_files']} with a local file, "
+                f"{repair_stats['repaired']} repaired from filename"
+            ))
+            for sample in repair_stats["unparsed_samples"]:
+                print(t.log_grey(f"unparsed filename: {sample!r}"))
+        tracks = self._library.tracks_missing_tidal_id()
+        if not tracks:
+            print(t.log("database already has all TIDAL track IDs"))
+            return
+        tidal_session = self.model.sessions["td"]
+        filled = 0
+        errors = 0
+        ambiguous = 0
+        error_samples = []
+        debug_samples = []
+        for track_id, title, artist, album in tqdm(
+            tracks, desc=t.busy("fixing missing database data"), unit="track"
+        ):
+            try:
+                results = tidal_session.search(
+                    f"{title} {artist}", models=[tidalapi.media.Track]
+                )
+            except Exception as error:
+                errors += 1
+                if len(error_samples) < 3:
+                    error_samples.append(f"{type(error).__name__}: {error}")
+                continue
+            normalized_title = _normalize_for_match(title)
+            all_tracks = results.get("tracks", [])
+            candidates = [
+                candidate for candidate in all_tracks
+                if normalized_title in {
+                    _normalize_for_match(candidate.name),
+                    _normalize_for_match(getattr(candidate, "full_name", None) or ""),
+                }
+            ]
+            if album:
+                normalized_album = _normalize_for_match(album)
+                album_matches = [
+                    candidate for candidate in candidates
+                    if _normalize_for_match(
+                        getattr(getattr(candidate, "album", None), "name", "")
+                    ) == normalized_album
+                ]
+                candidates = album_matches or candidates
+            if len(candidates) > 1 and artist:
+                # Local `artist` can be a "A, B" joined string (multi-artist
+                # tracks); compare each individually against tidal's artist list.
+                local_artists = {
+                    _normalize_for_match(name) for name in _split_artists(artist)
+                }
+                artist_matches = [
+                    candidate for candidate in candidates
+                    if local_artists & {
+                        _normalize_for_match(getattr(a, "name", ""))
+                        for a in (getattr(candidate, "artists", None) or [])
+                    }
+                ]
+                candidates = artist_matches or candidates
+            if len(candidates) == 1:
+                try:
+                    self._library.set_tidal_id(track_id, candidates[0].id)
+                    filled += 1
+                except Exception as error:
+                    errors += 1
+                    if len(error_samples) < 3:
+                        error_samples.append(f"{type(error).__name__}: {error}")
+            else:
+                ambiguous += 1
+                if len(debug_samples) < 5:
+                    local_line = f"{title} — {artist}" + (f" [{album}]" if album else "")
+                    candidate_lines = [
+                        f"    {_format_track(c)}" for c in (candidates or all_tracks)[:5]
+                    ]
+                    debug_samples.append(
+                        f"  missing: {local_line}\n" + "\n".join(candidate_lines)
+                    )
+
+        summary = (
+            f"filled {filled}/{len(tracks)} missing TIDAL track ID(s) "
+            f"({ambiguous} no unique match, {errors} search/write error(s))"
+        )
+        print(t.log(summary))
+        for sample in error_samples:
+            print(t.warning(f"sample error: {sample}"))
+        for sample in debug_samples:
+            print(t.log_grey(sample))
+
+    def resolve_playlist_name_from_url(self, url):
+        parsed = urlparse(url.strip())
+        host = parsed.netloc.lower()
+        parts = [part for part in parsed.path.split("/") if part]
+        if len(parts) < 2 or parts[0] != "playlist":
+            raise ValueError("URL must be a TIDAL or Spotify playlist URL")
+        media_id = parts[1]
+        if host.endswith("tidal.com"):
+            playlist = self.model.sessions["td"].playlist(media_id)
+            if not playlist:
+                raise ValueError("TIDAL playlist not found")
+            return playlist.name
+        if host.endswith("open.spotify.com"):
+            playlist = self.model.sessions["sp"].playlist(media_id)
+            return playlist["name"]
+        raise ValueError("unsupported TIDAL or Spotify URL")
+
+    def filter_playlists_with_missing(self, selection):
+        if not self._settings.get_database_enabled():
+            return set(selection)
+        stats = self.get_selection_stats(selection)
+        return {item["name"] for item in stats if item["missing"] > 0}
+
+    def get_selection_stats(self, selection, force_refresh=False):
+        # Build a fresh MusicLibrary the same way Downloader._prepare_tracks does,
+        # so "missing" here matches what the real download would skip.
+        settings = Files.SETTINGS.load() or {}
+        try:
+            library = MusicLibrary(
+                settings.get("downloadPath", "~/Spotidal"),
+                settings.get("databaseLocation"),
+            )
+        except Exception:
+            library = None
+
+        td_playlists = None
+        stats = []
+        for name in tqdm(
+            sorted(selection), desc=t.busy("fetching playlists"), unit="playlist"
+        ):
+            if force_refresh and library:
+                library.clear_playlist_tracks(name)
+            cached = (
+                library.get_playlist_track_stats(name)
+                if library and not force_refresh
+                else None
+            )
+            if cached is not None:
+                stats.append({"name": name, **cached})
+                continue
+
+            if td_playlists is None:
+                td_playlists = get_td_playlists_wrapper(self.model.sessions["td"])
+            td_playlist = td_playlists.get(name)
+            if td_playlist is None:
+                stats.append({"name": name, "total": 0, "local": 0, "missing": 0})
+                continue
+            tracks = asyncio.run(
+                get_all_playlist_tracks(td_playlist, show_log=False, show_progress=False)
+            )
+            total = len(tracks)
+            try:
+                match_map = library.available_track_id_map(tracks) if library else {}
+            except Exception:
+                match_map = {}
+            # Count distinct local files, not TIDAL tracks matched — two TIDAL
+            # tracks (e.g. near-duplicate versions) can fuzzy-match the same
+            # local file, and the cached count below is always per-file.
+            local = len(set(match_map.values()))
+            stats.append({
+                "name": name,
+                "total": total,
+                "local": local,
+                "missing": total - local,
+            })
+            if library:
+                try:
+                    library.save_playlist_membership(
+                        name, str(td_playlist.id), total, match_map.values()
+                    )
+                except Exception:
+                    pass
+        return stats
 
     def stop_library_monitoring(self):
         if self._library_watcher:
             self._library_watcher.stop()
 
     def clean_tmp(self):
-        clean_tmp(self._settings.get_download_dir())
-        print(t.log("temporary download files cleaned"))
+        if not self._require_local_directory():
+            return
+        removed_parts = clean_tmp(self._settings.get_download_dir())
+        message = f"temporary download files cleaned ({removed_parts} parts folder(s) deleted)"
+        if self._library:
+            purged = self._library.purge_temp_artifacts()
+            if purged["files"]:
+                message += (
+                    f", {purged['files']} orphaned tmp track(s) purged from database"
+                    f" ({purged['tracks']} track record(s) removed)"
+                )
+        print(t.log(message))
+
+    def tidekeeper_doctor(self):
+        check_login()
 
     def reset_sp_session(self):
         sp_credentials = view.setup_menu()
@@ -105,7 +442,7 @@ class ControllerMain:
         new_dir = view.download_dir_menu(self._settings.get_download_dir())
         if new_dir:
             saved = self._settings.set_download_dir(new_dir)
-            print(f"> download directory set to {saved}")
+            print(t.log(f"download directory set to {saved}"))
 
     def change_download_quality(self):
         from ..model.settings import QUALITY_OPTIONS
@@ -115,7 +452,7 @@ class ControllerMain:
         )
         if quality:
             self._settings.set_download_quality(quality)
-            print(f"> download quality set to {quality}")
+            print(t.log(f"download quality set to {quality}"))
 
     def change_audio_quality(self):
         result = view.audio_quality_menu(
@@ -129,7 +466,7 @@ class ControllerMain:
     def toggle_mp3_conversion(self):
         settings = self._settings.get_settings()
         value = view.toggle_menu(
-            "Automatic MP3 conversion", settings.get("autoConvertMp3", True)
+            "automatic mp3 conversion", settings.get("autoConvertMp3", True)
         )
         if value:
             self._settings.set_option("autoConvertMp3", value == "enable")
@@ -137,32 +474,46 @@ class ControllerMain:
     def change_database_option(self, action):
         settings = self._settings.get_settings()
         if action == "database enabled":
-            value = view.toggle_menu("Database", settings.get("databaseEnabled", True))
+            value = view.toggle_menu("database", settings.get("databaseEnabled", True))
             if value:
                 enabled = value == "enable"
                 self._settings.set_option("databaseEnabled", enabled)
                 if not enabled and self._library_watcher:
                     self._library_watcher.stop()
                     self._library_watcher = None
+                elif enabled and not self._library:
+                    self._require_local_directory(
+                        self._settings.get_database_path(), "Database settings"
+                    )
                 elif enabled and not self._library_watcher and self._settings.get_watcher_enabled():
                     self._library_watcher = LibraryWatcher(self._library)
                     self._library_watcher.start()
         elif action == "run watcher (update database)":
             self.reconcile_library()
+        elif action == "fill missing database data":
+            self.fill_missing_database_data()
         elif action == "database location path":
-            value = view.path_menu(self._settings.get_database_path(), "Database location")
+            value = view.path_menu(self._settings.get_database_path(), "database location")
             if value:
                 self._settings.set_option("databaseLocation", value)
+                if not self._library and self._settings.get_database_enabled():
+                    try:
+                        self._library = MusicLibrary(
+                            self._settings.get_download_dir(), value
+                        )
+                        print(t.log("local database initialized"))
+                    except Exception as error:
+                        print(t.warning(f"local directory is still unavailable: {error}"))
         elif action == "flac directory":
-            value = view.path_menu(self._settings.get_flac_dir(), "FLAC directory")
+            value = view.path_menu(self._settings.get_flac_dir(), "flac directory")
             if value:
                 self._settings.set_option("flacDirectory", value)
         elif action == "mp3 directory":
-            value = view.path_menu(self._settings.get_mp3_dir(), "MP3 directory")
+            value = view.path_menu(self._settings.get_mp3_dir(), "mp3 directory")
             if value:
                 self._settings.set_option("mp3Directory", value)
         elif action == "other locations":
-            print("> other locations will be implemented later")
+            print(t.log("other locations will be implemented later"))
 
     def reset_settings(self):
         self.reset_sp_session()

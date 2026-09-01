@@ -8,6 +8,7 @@ from spotidal.view.prompt import (
     MainMenu,
     SelectionModeMenu,
     SettingsMenu,
+    UtilsMenu,
     DownloadDirMenu,
     DownloadQualityMenu,
     AudioQualityMenu,
@@ -47,8 +48,15 @@ def main_menu():
     return action
 
 def settings_menu():
+    print()
     settings_menu = SettingsMenu()
     action = settings_menu.display()
+    return action
+
+def utils_menu():
+    print()
+    utils_menu = UtilsMenu()
+    action = utils_menu.display()
     return action
 
 def download_dir_menu(current=None):
@@ -70,18 +78,21 @@ def tidekeeper_settings_menu():
     return TidekeeperSettingsMenu().display()
 
 def default_selection_menu():
-    return DefaultSelectionMenu().display()
+    print()
+    action = DefaultSelectionMenu().display()
+    print()
+    return action
 
 def toggle_menu(message, enabled=True):
     return ToggleMenu().display(message, enabled)
 
-def path_menu(current=None, message="Path"):
+def path_menu(current=None, message="path"):
     return DownloadDirMenu().display(current, message)
 
 def confirm_selection_menu():
     confirm_menu = ConfirmMenu()
     response = confirm_menu.display(
-        "Proceed with selection or add more playlists? (y to proceed, n to add more)"
+        "proceed with selection or add more playlists? (y to proceed, n to add more)"
     )
     return response
 

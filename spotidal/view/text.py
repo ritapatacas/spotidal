@@ -7,6 +7,7 @@ class Colors(Enum):
     WHITE = "\033[0m"
     GREEN = "\033[38;5;70m"
     YELLOW = "\033[38;5;186m"
+    ORANGE = "\033[38;5;208m"
     BLUE = "\033[38;5;75m"
     PURPLE = "\033[95m"
     CYAN = "\033[96m"
@@ -44,11 +45,11 @@ class Text:
     
     @staticmethod
     def error(text):
-        return str(Colors.RED) + " ! " + str(Colors.WHITE) + text
+        return "\n" + str(Colors.RED) + "! " + str(Colors.WHITE) + text
 
     @staticmethod
     def warning(text):
-        return str(Colors.YELLOW) + " ! " + str(Colors.WHITE) + text
+        return "\n" + str(Colors.ORANGE) + "! " + str(Colors.WHITE) + text
 
     @staticmethod
     def grey(text):
@@ -62,6 +63,38 @@ class Text:
     def display_selection(selection):
         start = str(Colors.GREEN) + "> " + str(Colors.WHITE) + "current selection"
         return start + "\n" + "\n".join(f"  {item}" for item in sorted(selection))
+
+    @staticmethod
+    def display_selection_table(stats):
+        headers = ("playlist", "tracks", "local", "missing")
+        rows = [
+            (s["name"], str(s["total"]), str(s["local"]), str(s["missing"]))
+            for s in stats
+        ]
+        totals = (
+            "total",
+            str(sum(s["total"] for s in stats)),
+            str(sum(s["local"] for s in stats)),
+            str(sum(s["missing"] for s in stats)),
+        )
+        widths = [
+            max(len(headers[i]), len(totals[i]), *(len(row[i]) for row in rows)) if rows else max(len(headers[i]), len(totals[i]))
+            for i in range(4)
+        ]
+
+        def format_row(row):
+            name = row[0].ljust(widths[0])
+            nums = "  ".join(row[i].rjust(widths[i]) for i in range(1, 4))
+            return f"  {name}  {nums}"
+
+        separator = "  " + "-" * (widths[0] + sum(widths[1:]) + 6)
+        lines = [format_row(headers), separator]
+        lines.extend(format_row(row) for row in rows)
+        lines.append(separator)
+        lines.append(format_row(totals))
+
+        start = str(Colors.GREEN) + "> " + str(Colors.WHITE) + "current selection"
+        return start + "\n" + "\n".join(lines)
 
     @staticmethod
     def busy(text):

@@ -1,18 +1,21 @@
 import sys
-import traceback
 from spotidal.model.model import Model
 from spotidal.controller.playlist_controller import PlaylistController
 from spotidal.controller.controller_main import ControllerMain
 
 import spotidal.view.view as view
 from spotidal.view.text import Text as t
-from spotidal.model.helpers.td_downloader import pop_conversion_messages
+from spotidal.model.helpers.td_downloader import (
+    TidalSessionStaleError,
+    pop_conversion_messages,
+)
 from spotidal.view.setup import get_credentials
 
 from spotidal.view.prompt import (
     MainMenu,
     SelectionModeMenu,
     SettingsMenu,
+    UtilsMenu,
 )
 
 
@@ -21,7 +24,9 @@ class Controller:
         self.model = Model()
         self.init_sessions()
         self.app = ControllerMain(self.model)
-        print(t.log_grey(f"download directory {self.app.get_download_dir()}"))
+        print(t.busy(f"download dir: {self.app.get_download_dir()}"))
+        for warning in self.app.get_startup_warnings():
+            print(t.warning(warning))
         self.playlists = PlaylistController(self.model)
 
 
@@ -39,10 +44,10 @@ class Controller:
         if not td:
             sys.exit(t.error("unable to authenticate with TIDAL; please try again"))
         self.model.sessions = {"sp": sp, "td": td}
-        self.model.get_parsed_playlists()
-        
+
         log = self.model.get_session_log()
-        print(t.log_grey(log))
+        for account in log.splitlines():
+            print(t.busy(account))
 
     def run(self):
         while True:
@@ -60,11 +65,19 @@ class Controller:
                         self._download_settings()
                     elif action == SettingsMenu.DATABASE_SETTINGS:
                         self._database_settings()
-                    elif action == SettingsMenu.DEFAULT_SELECTION:
-                        self._default_selection()
-                    elif action == SettingsMenu.CLEAN_TMP:
-                        self.app.clean_tmp()
-                    
+                    elif action == SettingsMenu.HELP:
+                        print(t.log(
+                            "spotidal — sync and download playlists from Spotify via TIDAL.\n"
+                            "  download: pick playlists and download them\n"
+                            "  sync: pick playlists and keep them in sync\n"
+                            "  convert: convert downloaded FLAC files to MP3\n"
+                            "  utils: playlist selection, tmp cleanup, session refresh, database tools\n"
+                            "  settings: downloads and database configuration"
+                        ))
+
+                elif menu == MainMenu.UTILS[0]:
+                    self._utils_menu()
+
                 elif menu == MainMenu.SYNC[0] or menu == MainMenu.DOWNLOAD[0]:
                     if self.model.current_selection:
                         print(t.display_selection(self.model.current_selection))
@@ -89,7 +102,16 @@ class Controller:
                             self.model.current_selection.add(r)
 
                     elif action == SelectionModeMenu.LOAD:
-                        self.model.current_selection = set(self.playlists.load())
+                        selection = set(self.playlists.load())
+                        if menu == MainMenu.DOWNLOAD[0]:
+                            filtered = self.app.filter_playlists_with_missing(selection)
+                            skipped = len(selection) - len(filtered)
+                            if skipped:
+                                print(t.log(
+                                    f"skipped {skipped} playlist(s) already fully downloaded"
+                                ))
+                            selection = filtered
+                        self.model.current_selection = selection
 
                     elif action == SelectionModeMenu.URL:
                         url = view.url_menu()
@@ -117,16 +139,20 @@ class Controller:
                 elif menu == MainMenu.CONVERT[0]:
                     self.app.flac_to_mp3()
 
-                elif menu == MainMenu.RUN_WATCHER[0]:
-                    self.app.reconcile_library()
-                        
             except KeyboardInterrupt:
                 self.app.stop_library_monitoring()
                 print(t.log("quitting!"))
                 sys.exit()
+            except TidalSessionStaleError:
+                print(t.error(
+                    "TIDAL session is stale; refreshing access token before continuing"
+                ))
+                if self.app.refresh_td_session():
+                    print(t.log("TIDAL access token refreshed"))
+                else:
+                    print(t.warning("unable to refresh TIDAL access token"))
             except Exception as error:
                 print(t.error(f"error: {error}"))
-                traceback.print_exc()
 
     def _download_settings(self):
         while True:
@@ -149,7 +175,18 @@ class Controller:
                 return
             if action == "view selection":
                 selection = self.playlists.load()
-                print(t.display_selection(selection) if selection else "> no default playlists selected")
+                if not selection:
+                    print("> no default playlists selected")
+                else:
+                    stats = self.app.get_selection_stats(selection)
+                    print(t.display_selection_table(stats))
+            elif action == "refresh selection stats":
+                selection = self.playlists.load()
+                if not selection:
+                    print("> no default playlists selected")
+                else:
+                    stats = self.app.get_selection_stats(selection, force_refresh=True)
+                    print(t.display_selection_table(stats))
             elif action == "change selection":
                 selection = view.select_menu(
                     self.playlists.names(), self.playlists.load()
@@ -157,6 +194,65 @@ class Controller:
                 if selection:
                     self.playlists.save(selection)
                     print(t.log("default playlist selection saved"))
+
+    def _watch_playlist_files(self):
+        selection = set()
+        while True:
+            if selection:
+                print(t.display_selection(selection))
+            action = view.selection_mode_menu(True)
+            if action in (None, SelectionModeMenu.BACK[0]):
+                return
+            if action == SelectionModeMenu.SEARCH[0]:
+                selected = view.search_menu(self.playlists.not_selected())
+                if selected:
+                    selection.add(selected)
+            elif action == SelectionModeMenu.SELECT[0]:
+                result = view.select_menu(self.playlists.not_selected())
+                if result:
+                    for r in result:
+                        selection.add(r)
+            elif action == SelectionModeMenu.LOAD:
+                selection |= set(self.playlists.load())
+            elif action == SelectionModeMenu.URL:
+                url = view.url_menu()
+                if url:
+                    try:
+                        name = self.app.resolve_playlist_name_from_url(url)
+                        selection.add(name)
+                    except ValueError as error:
+                        print(t.error(str(error)))
+            if not selection:
+                continue
+            if view.confirm_selection_menu():
+                break
+        stats = self.app.get_selection_stats(selection, force_refresh=True)
+        print(t.display_selection_table(stats))
+
+    def _utils_menu(self):
+        while True:
+            action = view.utils_menu()
+            if action in (None, "back"):
+                return
+            if action == UtilsMenu.MANAGE_SELECTED_PLAYLIST:
+                self._default_selection()
+            elif action == UtilsMenu.CLEAN_TMP:
+                self.app.clean_tmp()
+            elif action == UtilsMenu.REFRESH_SESSION:
+                if self.app.refresh_td_session():
+                    print(t.log("TIDAL access token refreshed"))
+                else:
+                    print(t.warning("unable to refresh TIDAL access token"))
+            elif action == UtilsMenu.TIDEKEEPER_DOCTOR:
+                self.app.tidekeeper_doctor()
+            elif action == UtilsMenu.RUN_WATCHER:
+                self.app.reconcile_library()
+            elif action == UtilsMenu.WATCH_PLAYLIST_FILES:
+                self._watch_playlist_files()
+            elif action == UtilsMenu.CONVERT_TO_FLAC:
+                self.app.normalize_to_flac()
+            elif action == UtilsMenu.FIX_MISSING_DATA:
+                self.app.fill_missing_database_data()
 
     def _database_settings(self):
         while True:
@@ -170,7 +266,7 @@ class Controller:
             action = view.tidekeeper_settings_menu()
             if action in (None, "back"):
                 return
-            print(f"> Tidekeeper setting '{action}' will be implemented later")
+            print(t.log(f"Tidekeeper setting '{action}' will be implemented later"))
 
 def main():
     print(f"\n{t.red('Spotidal')}\n")
