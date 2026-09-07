@@ -14,9 +14,12 @@ import spotidal.view.view as view
 from ..model.settings import Settings
 from ..model.sync import Sync
 from ..model.download import Download
+from ..model.doctor import Doctor
+from ..model.genre import GenreFiller
 from ..model.flac_to_mp3 import FlacToMp3
 from ..model.normalize_audio import NormalizeToFlac
 from ..model.library import MusicLibrary
+from ..model.rekordbox import RekordboxExport
 from ..model.library_watcher import LibraryWatcher
 from ..model.helpers.sync.playlists_handler import get_td_playlists_wrapper
 from ..model.helpers.tidalapi import get_all_playlist_tracks
@@ -84,6 +87,7 @@ class ControllerMain:
                 )
         self._sync = Sync(self.model.sessions)
         self._download = Download(self.model.sessions)
+        self._doctor = Doctor(self.model, self._settings, self._download)
 
     def get_startup_warnings(self):
         return self._startup_warnings
@@ -98,7 +102,13 @@ class ControllerMain:
     def _require_local_directory(self, path=None, settings_area="Download settings"):
         path = Path(path or self._settings.get_download_dir()).expanduser()
         candidate = path
-        while not candidate.exists() and candidate != candidate.parent:
+        # Callers pass both directories (download/flac/mp3) and file paths
+        # (the database .db itself); validate the containing directory either
+        # way, and tolerate partially-created paths by falling back to the
+        # closest existing ancestor like before.
+        if candidate.is_file():
+            candidate = candidate.parent
+        while not candidate.is_dir() and candidate != candidate.parent:
             candidate = candidate.parent
         if not candidate.is_dir() or not os.access(candidate, os.W_OK):
             print(t.warning(
@@ -176,6 +186,12 @@ class ControllerMain:
 
     def get_download_dir(self):
         return self._settings.get_download_dir()
+
+    def get_notify_sound_delay(self):
+        return self._settings.get_notify_sound_delay()
+
+    def set_notify_sound_delay(self, minutes):
+        return self._settings.set_option("notifySoundAfterMinutes", minutes)
 
     def refresh_td_session(self):
         refreshed = self.model.refresh_td_session()
@@ -393,10 +409,15 @@ class ControllerMain:
                 match_map = library.available_track_id_map(tracks) if library else {}
             except Exception:
                 match_map = {}
-            # Count distinct local files, not TIDAL tracks matched — two TIDAL
-            # tracks (e.g. near-duplicate versions) can fuzzy-match the same
-            # local file, and the cached count below is always per-file.
-            local = len(set(match_map.values()))
+            # Coverage is per TIDAL playlist id (match_map keys), not per
+            # distinct local file: one file can cover several playlist
+            # entries (duplicate versions share a row), and the download
+            # pipeline skips every id already present in match_map — counting
+            # distinct files instead reported those covered ids as
+            # permanently "missing". Counted per entry, so a track listed
+            # twice in the playlist is not counted as missing when the
+            # (single) id is covered.
+            local = sum(1 for track in tracks if str(track.id) in match_map)
             stats.append({
                 "name": name,
                 "total": total,
@@ -406,7 +427,8 @@ class ControllerMain:
             if library:
                 try:
                     library.save_playlist_membership(
-                        name, str(td_playlist.id), total, match_map.values()
+                        name, str(td_playlist.id), total, match_map.values(),
+                        matched_tracks=local,
                     )
                 except Exception:
                     pass
@@ -432,6 +454,107 @@ class ControllerMain:
 
     def tidekeeper_doctor(self):
         check_login()
+
+    def doctor_download(self):
+        return self._doctor.run_download_doctor()
+
+    def doctor_playlists(self):
+        return self._doctor.run_playlists_doctor()
+
+    def doctor_missing_tracks(self):
+        return self._doctor.run_missing_tracks_doctor()
+
+    def doctor_mp3_quality(self):
+        return self._doctor.run_mp3_quality_doctor()
+
+    def doctor_all(self):
+        return self._doctor.run_all()
+
+    def fill_genres(self, track_ids=None):
+        if not self._settings.get_database_enabled():
+            print(t.error("database is disabled"))
+            return
+        if not self._library:
+            self._require_local_directory(
+                self._settings.get_database_path(), "Database settings"
+            )
+            return
+        GenreFiller(self._library).run(track_ids=track_ids)
+
+    def _require_genre_library(self):
+        if not self._settings.get_database_enabled():
+            print(t.error("database is disabled"))
+            return None
+        if not self._library:
+            self._require_local_directory(
+                self._settings.get_database_path(), "Database settings"
+            )
+            return None
+        return self._library
+
+    def final_genres(self):
+        library = self._require_genre_library()
+        return library.final_genres() if library else []
+
+    def final_genre_styles(self, genre_name=None):
+        library = self._require_genre_library()
+        return library.final_genre_styles(genre_name) if library else []
+
+    def add_final_genre(self, name):
+        library = self._require_genre_library()
+        if not library:
+            return None, False
+        genre_id, created = library.add_final_genre(name)
+        if genre_id is not None and not created:
+            print(t.log(f"genre '{name.strip()}' already exists"))
+        return genre_id, created
+
+    def add_style(self, name):
+        library = self._require_genre_library()
+        if not library:
+            return None, False
+        style_id, created = library.add_style(name)
+        if style_id is not None and not created:
+            print(t.log(f"style '{name.strip()}' already exists"))
+        return style_id, created
+
+    def playlist_names(self):
+        library = self._require_genre_library()
+        return library.playlist_names() if library else []
+
+    def track_ids_for_playlists(self, names):
+        library = self._require_genre_library()
+        return library.track_ids_for_playlists(names) if library else []
+
+    def export_rekordbox(self):
+        if not self._settings.get_database_enabled():
+            print(t.error("database is disabled"))
+            return
+        if not self._library:
+            self._require_local_directory(
+                self._settings.get_database_path(), "Database settings"
+            )
+            return
+        export = RekordboxExport(
+            self._library.database_path, self._library.root_path
+        )
+        output = self._library.root_path / "rekordbox"
+        playlists = export.export_m3u8(output / "playlists")
+        xml = export.export_xml(output / "rekordbox.xml")
+        print(t.log(
+            f"exported {xml['playlists']} playlists / {xml['tracks']} tracks"
+            f" to {output}"
+        ))
+        if xml["skipped"]:
+            print(t.warning(
+                "skipped (no local mp3): " + ", ".join(xml["skipped"])
+            ))
+        print(t.log(
+            "rekordbox: Preferences > Advanced > Database > rekordbox xml,"
+            " point it at rekordbox.xml, then drag the Spotidal folder into"
+            " your playlists"
+        ))
+        return {"m3u8": len(playlists["written"]), **xml}
 
     def reset_sp_session(self):
         sp_credentials = view.setup_menu()

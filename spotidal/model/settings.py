@@ -13,6 +13,7 @@ DEFAULTS = {
     "databaseEnabled": True,
     "watcherEnabled": True,
     "otherLocations": [],
+    "notifySoundAfterMinutes": 5,
     "tidekeeper": {
         "includeEP": False,
         "saveCovers": True,
@@ -116,6 +117,18 @@ class Settings:
 
     def get_watcher_enabled(self):
         return self.get_settings().get("watcherEnabled", True)
+
+    def get_notify_sound_delay(self):
+        try:
+            return max(
+                0.0,
+                float(self.get_settings().get(
+                    "notifySoundAfterMinutes",
+                    DEFAULTS["notifySoundAfterMinutes"],
+                )),
+            )
+        except (TypeError, ValueError):
+            return float(DEFAULTS["notifySoundAfterMinutes"])
 
     def set_option(self, key, value):
         settings = self.get_settings()
