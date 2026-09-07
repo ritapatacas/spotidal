@@ -8,6 +8,7 @@ import termios
 import threading
 import time
 import tty
+import unicodedata
 import webbrowser
 from pathlib import Path
 from queue import Empty, Queue
@@ -203,12 +204,15 @@ def _format_access_token_message(message):
 
 
 def _normalize_match_text(text):
-    return re.sub(r"[^\w]+", "", text.casefold())
+    # TIDAL reports titles in NFC while macOS normalizes new filenames to NFD;
+    # compare on a single form or accented tracks never match their own files.
+    return re.sub(r"[^\w]+", "", unicodedata.normalize("NFC", text).casefold())
 
 
 def _title_matches_file(title, file_path):
-    stem = file_path.stem.casefold()
-    if title.casefold() in stem:
+    title = unicodedata.normalize("NFC", title).casefold()
+    stem = unicodedata.normalize("NFC", file_path.stem).casefold()
+    if title in stem:
         return True
     # Filenames get punctuation (quotes, colons, "?", "'", accents-adjacent
     # symbols) stripped by tidekeeper, but the reported title doesn't — so

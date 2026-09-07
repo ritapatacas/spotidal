@@ -127,6 +127,14 @@ class Download:
         )
         self._reconcile_downloaded_files()
 
+    def by_track_url(self, url, return_titles=False):
+        return download(
+            url.strip(),
+            return_titles=return_titles,
+            refresh_callback=self._refresh_td_token,
+            reauth_callback=self._reauth_td_session,
+        )
+
     def by_td_ids(self, td_ids):
         self._reset_download_settings()
         playlists = []
