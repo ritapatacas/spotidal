@@ -18,7 +18,7 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 CREATE TABLE IF NOT EXISTS tracks (
     track_id TEXT PRIMARY KEY, title TEXT NOT NULL, artist TEXT NOT NULL,
     album TEXT, album_artist TEXT, isrc TEXT, spotify_id TEXT, tidal_id TEXT,
-    year INTEGER, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+    year INTEGER, genre TEXT, style TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS locations (
     location_id TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE, root_path TEXT NOT NULL,
@@ -34,6 +34,7 @@ CREATE TABLE IF NOT EXISTS files (
 CREATE TABLE IF NOT EXISTS playlists (
     playlist_id TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE,
     spotify_playlist_id TEXT, tidal_playlist_id TEXT, total_tracks INTEGER,
+    matched_tracks INTEGER,
     created_at TEXT NOT NULL, updated_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS playlist_tracks (
@@ -45,7 +46,74 @@ CREATE INDEX IF NOT EXISTS idx_tracks_isrc ON tracks(isrc);
 CREATE INDEX IF NOT EXISTS idx_tracks_spotify_id ON tracks(spotify_id);
 CREATE INDEX IF NOT EXISTS idx_tracks_tidal_id ON tracks(tidal_id);
 CREATE INDEX IF NOT EXISTS idx_files_path ON files(location_id, path);
+CREATE TABLE IF NOT EXISTS genre (
+    genre_id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE
+);
+CREATE TABLE IF NOT EXISTS style (
+    style_id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE
+);
+CREATE TABLE IF NOT EXISTS discogs_release (
+    discogs_release_id INTEGER PRIMARY KEY,
+    track_id TEXT NOT NULL REFERENCES tracks(track_id),
+    discogs_id INTEGER NOT NULL, master_id INTEGER,
+    confidence REAL, match_method TEXT, is_selected INTEGER NOT NULL DEFAULT 0,
+    review_status TEXT NOT NULL DEFAULT 'pending',
+    selection_method TEXT NOT NULL DEFAULT 'automatic',
+    title TEXT, year INTEGER, label TEXT, catalog_number TEXT,
+    created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS discogs_release_genre_style (
+    discogs_release_id INTEGER NOT NULL
+        REFERENCES discogs_release(discogs_release_id),
+    genre_id INTEGER NOT NULL REFERENCES genre(genre_id),
+    style_id INTEGER REFERENCES style(style_id),
+    UNIQUE (discogs_release_id, genre_id, style_id)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_release_genre_no_style
+    ON discogs_release_genre_style (discogs_release_id, genre_id)
+    WHERE style_id IS NULL;
+CREATE INDEX IF NOT EXISTS idx_discogs_release_track
+    ON discogs_release(track_id);
+CREATE INDEX IF NOT EXISTS idx_discogs_release_discogs_id
+    ON discogs_release(discogs_id);
+CREATE TABLE IF NOT EXISTS final_genre (
+    final_genre_id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE
+);
+CREATE TABLE IF NOT EXISTS track_genre_style (
+    track_id TEXT NOT NULL REFERENCES tracks(track_id),
+    final_genre_id INTEGER NOT NULL REFERENCES final_genre(final_genre_id),
+    style_id INTEGER REFERENCES style(style_id),
+    UNIQUE (track_id, final_genre_id, style_id)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_track_genre_no_style
+    ON track_genre_style (track_id, final_genre_id)
+    WHERE style_id IS NULL;
 """
+
+FINAL_GENRE_SEED = [
+    "House", "Techno", "Trance", "Drum & Bass", "Electro",
+    "Hip-Hop", "R&B", "Latin", "Disco", "Experimental",
+]
+
+
+def _recreate_track_genre_style(connection):
+    connection.execute(
+        """
+        CREATE TABLE track_genre_style (
+            track_id TEXT NOT NULL REFERENCES tracks(track_id),
+            final_genre_id INTEGER NOT NULL REFERENCES final_genre(final_genre_id),
+            style_id INTEGER REFERENCES style(style_id),
+            UNIQUE (track_id, final_genre_id, style_id)
+        )
+        """
+    )
+    connection.execute(
+        """
+        CREATE UNIQUE INDEX uq_track_genre_no_style
+        ON track_genre_style (track_id, final_genre_id)
+        WHERE style_id IS NULL
+        """
+    )
 
 
 def uuid7():
@@ -130,13 +198,95 @@ class MusicLibrary:
             }
             if "missing_at" not in columns:
                 connection.execute("ALTER TABLE files ADD COLUMN missing_at TEXT")
+            track_columns = {
+                row[1] for row in connection.execute("PRAGMA table_info(tracks)")
+            }
+            if "genre" not in track_columns:
+                connection.execute("ALTER TABLE tracks ADD COLUMN genre TEXT")
+            if "style" not in track_columns:
+                connection.execute("ALTER TABLE tracks ADD COLUMN style TEXT")
             playlist_columns = {
                 row[1] for row in connection.execute("PRAGMA table_info(playlists)")
             }
             if "total_tracks" not in playlist_columns:
                 connection.execute("ALTER TABLE playlists ADD COLUMN total_tracks INTEGER")
+            if "matched_tracks" not in playlist_columns:
+                connection.execute("ALTER TABLE playlists ADD COLUMN matched_tracks INTEGER")
+            release_columns = {
+                row[1] for row in connection.execute("PRAGMA table_info(discogs_release)")
+            }
+            if "review_status" not in release_columns:
+                connection.execute(
+                    "ALTER TABLE discogs_release ADD COLUMN review_status TEXT NOT NULL DEFAULT 'pending'"
+                )
+            if "selection_method" not in release_columns:
+                connection.execute(
+                    "ALTER TABLE discogs_release ADD COLUMN selection_method TEXT NOT NULL DEFAULT 'automatic'"
+                )
+            tgs_columns = {
+                row[1] for row in connection.execute("PRAGMA table_info(track_genre_style)")
+            }
+            if "genre_id" in tgs_columns:
+                # v4 shipped track_genre_style against the Discogs `genre`
+                # table; the final classification is its own taxonomy now.
+                # Safe to recreate while the table is still empty.
+                rows = connection.execute(
+                    "SELECT track_id, genre_id, style_id FROM track_genre_style"
+                ).fetchall()
+                if rows:
+                    raise RuntimeError(
+                        "track_genre_style still references the Discogs genre table "
+                        "and is not empty; migrate manually"
+                    )
+                connection.execute("DROP TABLE track_genre_style")
+                _recreate_track_genre_style(connection)
+            style_notnull = next(
+                (
+                    row[3] for row in connection.execute(
+                        "PRAGMA table_info(track_genre_style)"
+                    )
+                    if row[1] == "style_id"
+                ),
+                0,
+            )
+            if style_notnull:
+                # v5 shipped track_genre_style with a mandatory style; the
+                # final classification allows genre-only rows (style NULL).
+                if connection.execute(
+                    "SELECT 1 FROM track_genre_style LIMIT 1"
+                ).fetchone():
+                    raise RuntimeError(
+                        "track_genre_style has rows with a mandatory style; "
+                        "migrate manually"
+                    )
+                connection.execute("DROP TABLE track_genre_style")
+                _recreate_track_genre_style(connection)
+            for name in FINAL_GENRE_SEED:
+                connection.execute(
+                    "INSERT OR IGNORE INTO final_genre(name) VALUES(?)", (name,)
+                )
             connection.execute(
                 "INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES(1, ?)",
+                (_now(),),
+            )
+            connection.execute(
+                "INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES(2, ?)",
+                (_now(),),
+            )
+            connection.execute(
+                "INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES(3, ?)",
+                (_now(),),
+            )
+            connection.execute(
+                "INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES(4, ?)",
+                (_now(),),
+            )
+            connection.execute(
+                "INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES(5, ?)",
+                (_now(),),
+            )
+            connection.execute(
+                "INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES(6, ?)",
                 (_now(),),
             )
 
@@ -169,6 +319,12 @@ class MusicLibrary:
             "isrc": isrc,
             "year": _year(_first(tags, "date", "originaldate")),
         }
+
+    def read_track_id(self, file_path):
+        file_path = Path(file_path)
+        if file_path.suffix.lower() == ".flac":
+            return _first(FLAC(file_path).tags or {}, "TRACK_ID")
+        return _first(ID3(file_path), "TXXX:TRACK_ID")
 
     def write_track_id(self, file_path, track_id):
         if file_path.suffix.lower() == ".flac":
@@ -232,10 +388,16 @@ class MusicLibrary:
                 (track_id, location_id, file_path.suffix.lower().lstrip("."), relative_path, file_path.name, file_path.stat().st_size, None, now, now),
             )
             existing_file = connection.execute(
-                "SELECT file_id FROM files WHERE track_id=? AND location_id=? AND format=? AND path<>?",
+                "SELECT file_id, path FROM files WHERE track_id=? AND location_id=? AND format=? AND path<>?",
                 (track_id, location_id, file_path.suffix.lower().lstrip("."), relative_path),
             ).fetchone()
-            if existing_file:
+            # Re-point the row at the new path only when the previous file is
+            # genuinely gone (rename/move). The same track legitimately exists
+            # on several albums (Thriller vs Thriller 25 Deluxe); re-pointing
+            # when both copies are on disk made the row flip between the two
+            # paths on every scan, each scan reporting the dropped copy as
+            # "added" - the endless "6 added" in the watcher log.
+            if existing_file and not (Path(location_root).expanduser() / existing_file[1]).is_file():
                 connection.execute(
                     "DELETE FROM files WHERE file_id = (SELECT file_id FROM files WHERE location_id=? AND path=?)",
                     (location_id, relative_path),
@@ -344,9 +506,12 @@ class MusicLibrary:
     def available_track_ids(self, tracks):
         return set(self.available_track_id_map(tracks).keys())
 
-    def save_playlist_membership(self, name, tidal_playlist_id, total_tracks, track_ids):
+    def save_playlist_membership(
+        self, name, tidal_playlist_id, total_tracks, track_ids, matched_tracks=None
+    ):
         playlist_id = self.upsert_playlist(
-            name, tidal_playlist_id=tidal_playlist_id, total_tracks=total_tracks
+            name, tidal_playlist_id=tidal_playlist_id, total_tracks=total_tracks,
+            matched_tracks=matched_tracks,
         )
         self.add_playlist_tracks(playlist_id, track_ids)
 
@@ -362,6 +527,103 @@ class MusicLibrary:
             connection.execute(
                 "UPDATE tracks SET tidal_id=?, updated_at=? WHERE track_id=?",
                 (str(tidal_id), _now(), track_id),
+            )
+
+    def genre_scan_rows(self, track_ids=None):
+        with self._connect() as connection:
+            query = (
+                "SELECT t.track_id, t.title, t.artist, t.album, t.isrc, t.genre, "
+                "f.format, f.path, l.root_path "
+                "FROM tracks t "
+                "JOIN files f ON f.track_id = t.track_id "
+                "JOIN locations l ON l.location_id = f.location_id "
+                "WHERE f.missing_at IS NULL"
+            )
+            params = []
+            if track_ids:
+                placeholders = ",".join("?" for _ in track_ids)
+                query += f" AND t.track_id IN ({placeholders})"
+                params = list(track_ids)
+            return connection.execute(query + " ORDER BY t.album, t.title", params).fetchall()
+
+    def final_genres(self):
+        with self._connect() as connection:
+            return connection.execute(
+                "SELECT g.name, COUNT(tgs.track_id) FROM final_genre g "
+                "LEFT JOIN track_genre_style tgs USING(final_genre_id) "
+                "GROUP BY g.final_genre_id ORDER BY g.name"
+            ).fetchall()
+
+    def final_genre_styles(self, genre_name=None):
+        with self._connect() as connection:
+            query = (
+                "SELECT g.name, COALESCE(s.name, '(no style)'), COUNT(*) "
+                "FROM track_genre_style tgs "
+                "JOIN final_genre g USING(final_genre_id) "
+                "LEFT JOIN style s USING(style_id)"
+            )
+            params = []
+            if genre_name:
+                query += " WHERE g.name = ?"
+                params = [genre_name]
+            query += " GROUP BY g.name, s.name ORDER BY g.name, s.name"
+            return connection.execute(query, params).fetchall()
+
+    def add_final_genre(self, name):
+        name = (name or "").strip()
+        if not name:
+            return None, False
+        with self._connect() as connection:
+            existing = connection.execute(
+                "SELECT final_genre_id FROM final_genre WHERE name = ?", (name,)
+            ).fetchone()
+            if existing:
+                return existing[0], False
+            cursor = connection.execute(
+                "INSERT INTO final_genre(name) VALUES(?)", (name,)
+            )
+        return cursor.lastrowid, True
+
+    def add_style(self, name):
+        name = (name or "").strip()
+        if not name:
+            return None, False
+        with self._connect() as connection:
+            existing = connection.execute(
+                "SELECT style_id FROM style WHERE name = ?", (name,)
+            ).fetchone()
+            if existing:
+                return existing[0], False
+            cursor = connection.execute("INSERT INTO style(name) VALUES(?)", (name,))
+        return cursor.lastrowid, True
+
+    def playlist_names(self):
+        with self._connect() as connection:
+            return [
+                row[0] for row in connection.execute(
+                    "SELECT name FROM playlists ORDER BY name COLLATE NOCASE"
+                )
+            ]
+
+    def track_ids_for_playlists(self, names):
+        names = list(names or [])
+        if not names:
+            return []
+        placeholders = ",".join("?" for _ in names)
+        with self._connect() as connection:
+            return [
+                row[0] for row in connection.execute(
+                    f"SELECT DISTINCT pt.track_id FROM playlist_tracks pt "
+                    f"JOIN playlists p USING(playlist_id) WHERE p.name IN ({placeholders})",
+                    names,
+                )
+            ]
+
+    def set_track_genre(self, track_id, genre, style):
+        with self._connect() as connection:
+            connection.execute(
+                "UPDATE tracks SET genre=?, style=?, updated_at=? WHERE track_id=?",
+                (genre, style, _now(), track_id),
             )
 
     def purge_orphan_tracks(self):
@@ -531,14 +793,15 @@ class MusicLibrary:
         return changes
 
     def upsert_playlist(
-        self, name, spotify_playlist_id=None, tidal_playlist_id=None, total_tracks=None
+        self, name, spotify_playlist_id=None, tidal_playlist_id=None,
+        total_tracks=None, matched_tracks=None,
     ):
         now = _now()
         playlist_id = str(uuid.uuid5(uuid.NAMESPACE_URL, f"spotidal:playlist:{name}"))
         with self._connect() as connection:
             connection.execute(
-                "INSERT INTO playlists(playlist_id,name,spotify_playlist_id,tidal_playlist_id,total_tracks,created_at,updated_at) VALUES(?,?,?,?,?,?,?) ON CONFLICT(name) DO UPDATE SET spotify_playlist_id=COALESCE(excluded.spotify_playlist_id, playlists.spotify_playlist_id), tidal_playlist_id=COALESCE(excluded.tidal_playlist_id, playlists.tidal_playlist_id), total_tracks=COALESCE(excluded.total_tracks, playlists.total_tracks), updated_at=excluded.updated_at",
-                (playlist_id, name, spotify_playlist_id, tidal_playlist_id, total_tracks, now, now),
+                "INSERT INTO playlists(playlist_id,name,spotify_playlist_id,tidal_playlist_id,total_tracks,matched_tracks,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(name) DO UPDATE SET spotify_playlist_id=COALESCE(excluded.spotify_playlist_id, playlists.spotify_playlist_id), tidal_playlist_id=COALESCE(excluded.tidal_playlist_id, playlists.tidal_playlist_id), total_tracks=COALESCE(excluded.total_tracks, playlists.total_tracks), matched_tracks=COALESCE(excluded.matched_tracks, playlists.matched_tracks), updated_at=excluded.updated_at",
+                (playlist_id, name, spotify_playlist_id, tidal_playlist_id, total_tracks, matched_tracks, now, now),
             )
         return playlist_id
 
@@ -569,19 +832,105 @@ class MusicLibrary:
     def get_playlist_track_stats(self, name):
         with self._connect() as connection:
             row = connection.execute(
-                "SELECT playlist_id, total_tracks FROM playlists WHERE name = ?",
+                "SELECT playlist_id, total_tracks, matched_tracks FROM playlists WHERE name = ?",
                 (name,),
             ).fetchone()
             if not row or row[1] is None:
                 return None
-            playlist_id, total = row
+            playlist_id, total, matched = row
             local = connection.execute(
                 "SELECT COUNT(DISTINCT pt.track_id) FROM playlist_tracks pt "
                 "JOIN files f ON f.track_id = pt.track_id "
                 "WHERE pt.playlist_id = ? AND f.missing_at IS NULL",
                 (playlist_id,),
             ).fetchone()[0]
+        # matched_tracks counts covered TIDAL ids (several playlist entries can
+        # legitimately share one local file); fall back to the per-file count
+        # for rows cached before the column existed.
+        local = max(local, matched) if matched is not None else local
+        local = min(local, total)
         return {"total": total, "local": local, "missing": total - local}
+
+    def audit_playlist(self, name):
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT playlist_id, tidal_playlist_id, total_tracks, matched_tracks "
+                "FROM playlists WHERE name = ?",
+                (name,),
+            ).fetchone()
+            if not row:
+                return {"synced": False}
+            playlist_id, tidal_playlist_id, total, matched = row
+            membership = connection.execute(
+                "SELECT COUNT(*) FROM playlist_tracks WHERE playlist_id = ?",
+                (playlist_id,),
+            ).fetchone()[0]
+            missing_tidal_id = connection.execute(
+                "SELECT tracks.track_id, tracks.title, tracks.artist "
+                "FROM playlist_tracks "
+                "JOIN tracks ON tracks.track_id = playlist_tracks.track_id "
+                "WHERE playlist_tracks.playlist_id = ? AND tracks.tidal_id IS NULL "
+                "ORDER BY tracks.title COLLATE NOCASE",
+                (playlist_id,),
+            ).fetchall()
+            missing_files = connection.execute(
+                "SELECT tracks.track_id, tracks.title, tracks.artist "
+                "FROM playlist_tracks "
+                "JOIN tracks ON tracks.track_id = playlist_tracks.track_id "
+                "WHERE playlist_tracks.playlist_id = ? AND NOT EXISTS ("
+                "  SELECT 1 FROM files WHERE files.track_id = tracks.track_id "
+                "  AND files.missing_at IS NULL"
+                ") ORDER BY tracks.title COLLATE NOCASE",
+                (playlist_id,),
+            ).fetchall()
+        return {
+            "synced": True,
+            "tidal_playlist_id": tidal_playlist_id,
+            "total": total,
+            "matched": matched,
+            "membership": membership,
+            "missing_tidal_id": missing_tidal_id,
+            "missing_files": missing_files,
+        }
+
+    def file_details_for_tidal_id(self, tidal_id):
+        with self._connect() as connection:
+            return connection.execute(
+                "SELECT tracks.track_id, tracks.title, tracks.artist, files.file_id, "
+                "files.path, files.filename, files.missing_at, locations.root_path "
+                "FROM tracks "
+                "JOIN files ON files.track_id = tracks.track_id "
+                "JOIN locations ON locations.location_id = files.location_id "
+                "WHERE tracks.tidal_id = ?",
+                (str(tidal_id),),
+            ).fetchall()
+
+    def purge_tidal_track(self, tidal_id):
+        # Targeted cleanup for the download doctor's own test import; unlike
+        # purge_orphan_tracks this only ever touches the given tidal_id.
+        with self._connect() as connection:
+            track_ids = [
+                row[0] for row in connection.execute(
+                    "SELECT track_id FROM tracks WHERE tidal_id = ?", (str(tidal_id),)
+                ).fetchall()
+            ]
+            removed_files = 0
+            track_removed = False
+            for track_id in track_ids:
+                removed_files += connection.execute(
+                    "DELETE FROM files WHERE track_id = ?", (track_id,)
+                ).rowcount
+                remaining = connection.execute(
+                    "SELECT COUNT(*) FROM files WHERE track_id = ?", (track_id,)
+                ).fetchone()[0]
+                if remaining == 0:
+                    connection.execute(
+                        "DELETE FROM playlist_tracks WHERE track_id = ?", (track_id,)
+                    )
+                    track_removed = bool(connection.execute(
+                        "DELETE FROM tracks WHERE track_id = ?", (track_id,)
+                    ).rowcount)
+        return {"files": removed_files, "track_removed": track_removed}
 
     def associate_tidal_playlist(self, playlist, tidal_playlist_id, tracks=None):
         playlist_tracks = tracks if tracks is not None else playlist.tracks()
