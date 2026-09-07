@@ -2,7 +2,55 @@ from enum import Enum
 from InquirerPy import prompt
 
 
+def _ask(questions, **kwargs):
+    try:
+        return prompt(questions, **kwargs)
+    except KeyboardInterrupt:
+        return {}
+
+
 BACK_KEYBINDINGS = {"skip": [{"key": "escape"}]}
+
+
+class Submenu:
+    def __init__(self, title, options):
+        self.title = title
+        self.options = list(options) + ["back"]
+
+    def display(self):
+        questions = [{
+            "type": "list", "name": "action", "message": self.title,
+            "choices": self.options, "mandatory": False,
+            "keybindings": BACK_KEYBINDINGS,
+        }]
+        action = _ask(questions).get("action")
+        return None if action == "back" else action
+
+
+class InputMenu:
+    def __init__(self, message):
+        self.message = message
+
+    def display(self):
+        questions = [{
+            "type": "input", "name": "value", "message": self.message,
+            "mandatory": False, "keybindings": BACK_KEYBINDINGS,
+        }]
+        return _ask(questions).get("value")
+
+
+class ListMenu:
+    def __init__(self, title, options):
+        self.title = title
+        self.options = list(options)
+
+    def display(self):
+        questions = [{
+            "type": "list", "name": "action", "message": self.title,
+            "choices": self.options, "mandatory": False,
+            "keybindings": BACK_KEYBINDINGS,
+        }]
+        return _ask(questions).get("action")
 
 
 class Prompt(Enum):
@@ -103,7 +151,7 @@ class MainMenu(MenuBase):
                 "keybindings": BACK_KEYBINDINGS,
             }
         ]
-        response = prompt(questions)
+        response = _ask(questions)
         return response.get("action")
 
 
@@ -111,11 +159,13 @@ class SettingsMenu(MenuBase):
     SETTINGS_Q = "settings"
     DOWNLOAD_SETTINGS = "downloads"
     DATABASE_SETTINGS = "database"
+    NOTIFICATIONS_SETTINGS = "notifications"
     HELP = "help"
     BACK = "back"
     SETTINGS_OPT = [
         DOWNLOAD_SETTINGS,
         DATABASE_SETTINGS,
+        NOTIFICATIONS_SETTINGS,
         HELP,
         BACK,
     ]
@@ -135,7 +185,7 @@ class SettingsMenu(MenuBase):
                 "keybindings": BACK_KEYBINDINGS,
             }
         ]
-        response = prompt(questions)
+        response = _ask(questions)
         return response.get("action")
 
 
@@ -145,22 +195,53 @@ class UtilsMenu(MenuBase):
     CLEAN_TMP = "clean tmp files"
     REFRESH_SESSION = "refresh tidal session"
     TIDEKEEPER_DOCTOR = "run tidekeeper doctor"
+    DOCTOR_DOWNLOAD = "download doctor (full pipeline check)"
+    DOCTOR_PLAYLISTS = "playlists doctor (selection vs db)"
+    DOCTOR_MISSING_TRACKS = "missing tracks doctor (download missing)"
+    DOCTOR_MP3_QUALITY = "mp3 quality doctor (bitrate vs flac)"
     RUN_WATCHER = "run local files watcher (update db)"
     WATCH_PLAYLIST_FILES = "watch playlist files (update db)"
     CONVERT_TO_FLAC = "convert non-flac files to flac"
     FIX_MISSING_DATA = "fix missing data (update db)"
+    FILL_GENRES = "fill genres from discogs (tags+db)"
+    EXPORT_REKORDBOX = "export playlists for rekordbox (xml+m3u8)"
     BACK = "back"
-    UTILS_OPT = [
-        MANAGE_SELECTED_PLAYLIST,
-        CLEAN_TMP,
-        REFRESH_SESSION,
-        TIDEKEEPER_DOCTOR,
-        RUN_WATCHER,
-        WATCH_PLAYLIST_FILES,
-        CONVERT_TO_FLAC,
-        FIX_MISSING_DATA,
-        BACK,
+
+    PLAYLISTS = "playlists"
+    DOWNLOAD = "download"
+    LOCAL_FILES = "local files"
+    DATABASE = "database"
+    GENRES = "genres"
+    UTILS_OPT = [PLAYLISTS, DOWNLOAD, LOCAL_FILES, DATABASE, GENRES]
+
+    PLAYLISTS_OPT = [
+        MANAGE_SELECTED_PLAYLIST, DOCTOR_PLAYLISTS,
+        WATCH_PLAYLIST_FILES, EXPORT_REKORDBOX,
     ]
+    DOWNLOAD_OPT = [
+        DOCTOR_DOWNLOAD, DOCTOR_MISSING_TRACKS, TIDEKEEPER_DOCTOR,
+        CLEAN_TMP, REFRESH_SESSION,
+    ]
+    LOCAL_FILES_OPT = [
+        DOCTOR_MP3_QUALITY, CONVERT_TO_FLAC, RUN_WATCHER,
+        WATCH_PLAYLIST_FILES, EXPORT_REKORDBOX,
+    ]
+    DATABASE_OPT = [
+        DOCTOR_PLAYLISTS, RUN_WATCHER, WATCH_PLAYLIST_FILES,
+        FIX_MISSING_DATA, FILL_GENRES,
+    ]
+    VIEW_GENRES = "view genres"
+    VIEW_GENRE_STYLES = "view genre styles"
+    ADD_GENRE_STYLE = "add genre and/or style"
+    GENRES_OPT = [
+        VIEW_GENRES, VIEW_GENRE_STYLES, ADD_GENRE_STYLE, FILL_GENRES,
+    ]
+    ALL_GENRES = "all genres"
+    SELECT_GENRE = "select genre"
+    VIEW_STYLES_OPT = [ALL_GENRES, SELECT_GENRE]
+    FILL_SELECTED = "selected"
+    FILL_SELECT_PLAYLISTS = "select playlists"
+    FILL_GENRES_OPT = [FILL_SELECTED, FILL_SELECT_PLAYLISTS]
 
     def __init__(self):
         super().__init__(Prompt.LIST)
@@ -177,7 +258,10 @@ class UtilsMenu(MenuBase):
                 "keybindings": BACK_KEYBINDINGS,
             }
         ]
-        response = prompt(questions)
+        try:
+            response = _ask(questions)
+        except KeyboardInterrupt:
+            return None
         return response.get("action")
 
 
@@ -198,7 +282,7 @@ class DownloadSettingsMenu(MenuBase):
             "choices": self.OPTIONS, "mandatory": False,
             "keybindings": BACK_KEYBINDINGS,
         }]
-        return prompt(questions).get("action")
+        return _ask(questions).get("action")
 
 
 class DatabaseSettingsMenu(MenuBase):
@@ -226,7 +310,40 @@ class DatabaseSettingsMenu(MenuBase):
             "choices": self.OPTIONS, "mandatory": False,
             "keybindings": BACK_KEYBINDINGS,
         }]
-        return prompt(questions).get("action")
+        return _ask(questions).get("action")
+
+
+class NotificationsSettingsMenu(MenuBase):
+    SOUND_DELAY = "notification sound delay (minutes)"
+    BACK = "back"
+    OPTIONS = [SOUND_DELAY, BACK]
+
+    def __init__(self):
+        super().__init__(Prompt.LIST)
+
+    def display(self):
+        questions = [{
+            "type": "list", "name": "action", "message": "notifications",
+            "choices": self.OPTIONS, "mandatory": False,
+            "keybindings": BACK_KEYBINDINGS,
+        }]
+        return _ask(questions).get("action")
+
+
+class NotificationDelayMenu(MenuBase):
+    def __init__(self):
+        super().__init__(Prompt.INPUT)
+
+    def display(self, current=None):
+        message = "play a sound when a task takes longer than (minutes, 0 disables)"
+        questions = [{
+            "type": "input",
+            "name": "value",
+            "message": f"{message} (current: {current})",
+            "default": str(current) if current is not None else "5",
+            "keybindings": BACK_KEYBINDINGS,
+        }]
+        return _ask(questions).get("value")
 
 
 class TidekeeperSettingsMenu(MenuBase):
@@ -246,7 +363,7 @@ class TidekeeperSettingsMenu(MenuBase):
             "choices": self.OPTIONS, "mandatory": False,
             "keybindings": BACK_KEYBINDINGS,
         }]
-        return prompt(questions).get("action")
+        return _ask(questions).get("action")
 
 
 class DefaultSelectionMenu(MenuBase):
@@ -266,7 +383,7 @@ class DefaultSelectionMenu(MenuBase):
             "choices": self.OPTIONS, "mandatory": False,
             "keybindings": BACK_KEYBINDINGS,
         }]
-        return prompt(questions).get("action")
+        return _ask(questions).get("action")
 
 
 class DownloadDirMenu(MenuBase):
@@ -286,7 +403,7 @@ class DownloadDirMenu(MenuBase):
                 "keybindings": BACK_KEYBINDINGS,
             }
         ]
-        response = prompt(questions)
+        response = _ask(questions)
         return response.get("download_dir")
 
 
@@ -308,7 +425,7 @@ class DownloadQualityMenu(MenuBase):
                 "keybindings": BACK_KEYBINDINGS,
             }
         ]
-        response = prompt(questions)
+        response = _ask(questions)
         return response.get("quality")
 
 
@@ -332,7 +449,7 @@ class AudioQualityMenu(MenuBase):
                 "mandatory": False, "keybindings": BACK_KEYBINDINGS,
             },
         ]
-        return prompt(questions)
+        return _ask(questions)
 
 
 class ToggleMenu(MenuBase):
@@ -346,7 +463,7 @@ class ToggleMenu(MenuBase):
             "default": "enable" if enabled else "disable",
             "mandatory": False, "keybindings": BACK_KEYBINDINGS,
         }]
-        return prompt(questions).get("value")
+        return _ask(questions).get("value")
 
 
 class SaveSelectionMenu(MenuBase):
@@ -371,7 +488,7 @@ class SaveSelectionMenu(MenuBase):
                 },
             }
         ]
-        response = prompt(questions)
+        response = _ask(questions)
         return response.get("save_selection")
 
 
@@ -405,7 +522,7 @@ class SelectionModeMenu(MenuBase):
                 "keybindings": BACK_KEYBINDINGS,
             }
         ]
-        response = prompt(questions)
+        response = _ask(questions)
         return response.get("action")
 
 
@@ -423,7 +540,7 @@ class URLMenu(MenuBase):
                 "keybindings": BACK_KEYBINDINGS,
             }
         ]
-        response = prompt(questions)
+        response = _ask(questions)
         return response.get("url")
 
 
@@ -455,7 +572,7 @@ class SelectMenu(MenuBase):
                 "keybindings": BACK_KEYBINDINGS,
             }
         ]
-        response = prompt(questions, keybindings=keybindings_select_list)
+        response = _ask(questions, keybindings=keybindings_select_list)
         if not response.get("selected_playlists"):
             print(self.SELECT_ERR)
         return response.get("selected_playlists")
@@ -478,7 +595,7 @@ class SearchMenu(MenuBase):
                 "keybindings": BACK_KEYBINDINGS,
             }
         ]
-        response = prompt(questions)
+        response = _ask(questions)
         return response.get("search_playlists")
 
 
@@ -513,5 +630,5 @@ class ConfirmMenu(MenuBase):
                 },
             }
         ]
-        response = prompt(questions)
+        response = _ask(questions)
         return response.get("confirm")

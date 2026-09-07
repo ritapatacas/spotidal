@@ -14,6 +14,8 @@ from spotidal.view.prompt import (
     AudioQualityMenu,
     DownloadSettingsMenu,
     DatabaseSettingsMenu,
+    NotificationsSettingsMenu,
+    NotificationDelayMenu,
     TidekeeperSettingsMenu,
     DefaultSelectionMenu,
     ToggleMenu,
@@ -22,6 +24,9 @@ from spotidal.view.prompt import (
     SaveSelectionMenu,
     ConfirmMenu,
     URLMenu,
+    Submenu,
+    ListMenu,
+    InputMenu,
 )
 
 #app = Controller()
@@ -76,6 +81,12 @@ def database_settings_menu():
 
 def tidekeeper_settings_menu():
     return TidekeeperSettingsMenu().display()
+
+def notifications_settings_menu():
+    return NotificationsSettingsMenu().display()
+
+def notification_delay_menu(current=None):
+    return NotificationDelayMenu().display(current)
 
 def default_selection_menu():
     print()
