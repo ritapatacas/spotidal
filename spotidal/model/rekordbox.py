@@ -3,6 +3,11 @@ import urllib.parse
 from pathlib import Path
 from xml.sax.saxutils import quoteattr
 
+try:
+    from pyrekordbox import Rekordbox6Database
+except ImportError:  # pyrekordbox is an optional dependency for the import path
+    Rekordbox6Database = None
+
 # Rekordbox matches XML tracks against the collection by Location, so the paths
 # written here must be the exact absolute mp3 paths already imported there.
 FOLDER_NAME = "Spotidal"
@@ -21,6 +26,35 @@ def _location_url(path):
     return "file://localhost" + urllib.parse.quote(str(path), safe="/")
 
 
+class RekordboxImport:
+    """Reads BPM and musical key out of rekordbox's own (encrypted) library,
+    so they can be matched back onto our tracks by absolute file path.
+
+    Opens the actual rekordbox 6/7 `master.db` via pyrekordbox, which handles
+    locating the database and extracting rekordbox's SQLCipher key itself.
+    """
+
+    def __init__(self, db_dir=None):
+        if Rekordbox6Database is None:
+            raise RuntimeError(
+                "pyrekordbox is not installed; run `poetry install`"
+            )
+        self._db = Rekordbox6Database(db_dir) if db_dir else Rekordbox6Database()
+
+    def tracks(self):
+        """Yields (absolute_file_path, bpm, key) for every rekordbox track
+        with a resolvable local file path. BPM/key are None when rekordbox
+        has not analyzed the track.
+        """
+        for content in self._db.get_content():
+            path = content.FolderPath
+            if not path:
+                continue
+            bpm = float(content.BPM) / 100 if content.BPM else None
+            key = content.Key.ScaleName if content.Key else None
+            yield path, bpm, key
+
+
 class RekordboxExport:
     """Rebuilds the library's playlists as files rekordbox can import."""
 
@@ -28,15 +62,26 @@ class RekordboxExport:
         self.database_path = Path(database_path).expanduser().resolve()
         self.root_path = Path(root_path).expanduser().resolve()
 
+    def _folder_for(self, owner, folder_path):
+        """Owner always wins: Anto's playlists live under "Anto", anyone
+        else's under "baitadas", regardless of what folder_path says. Only
+        the owner-less (mine) playlists use their stored folder_path.
+        """
+        if owner == "Anto":
+            return "Anto"
+        if owner:
+            return "baitadas"
+        return folder_path or ""
+
     def _playlists(self):
-        """Playlist name -> ordered, de-duplicated absolute mp3 paths on disk."""
+        """(folder_path, name) -> ordered, de-duplicated absolute mp3 paths on disk."""
         connection = sqlite3.connect(self.database_path)
         try:
             playlists = []
             rows = connection.execute(
-                "SELECT playlist_id, name FROM playlists ORDER BY name"
+                "SELECT playlist_id, name, owner, folder_path FROM playlists ORDER BY name"
             ).fetchall()
-            for playlist_id, name in rows:
+            for playlist_id, name, owner, folder_path in rows:
                 tracks = []
                 seen = set()
                 for track_id, path in connection.execute(
@@ -53,7 +98,8 @@ class RekordboxExport:
                         continue
                     seen.add(track_id)
                     tracks.append((track_id, absolute))
-                playlists.append((name, tracks))
+                folder = self._folder_for(owner, folder_path)
+                playlists.append((folder, name, tracks))
             return playlists
         finally:
             connection.close()
@@ -78,7 +124,7 @@ class RekordboxExport:
         output_path = Path(output_path).expanduser().resolve()
         output_path.mkdir(parents=True, exist_ok=True)
         written, skipped = [], []
-        for name, tracks in self._playlists():
+        for _, name, tracks in self._playlists():
             if not tracks:
                 skipped.append(name)
                 continue
@@ -90,8 +136,54 @@ class RekordboxExport:
             written.append(target)
         return {"written": written, "skipped": skipped}
 
+    @staticmethod
+    def _folder_tree(playlists):
+        """Nests (folder_path, name, tracks) triples into a tree keyed by each
+        path segment, e.g. "parties/all yesterday parties" -> two levels deep.
+        Each node holds "_playlists" (this level's leaf playlists) and further
+        nested dicts for subfolders, in first-seen order.
+        """
+        root = {"_playlists": []}
+        for folder_path, name, tracks in playlists:
+            node = root
+            if folder_path:
+                for segment in folder_path.split("/"):
+                    node = node.setdefault(segment, {"_playlists": []})
+            node["_playlists"].append((name, tracks))
+        return root
+
+    def _render_tree(self, node, keys, indent):
+        pad = "  " * indent
+        lines = []
+        for name, tracks in node["_playlists"]:
+            lines.append(
+                f'{pad}<NODE Name={quoteattr(name)} Type="1" KeyType="0" '
+                f'Entries="{len(tracks)}">'
+            )
+            for track_id, _ in tracks:
+                lines.append(f'{pad}  <TRACK Key="{keys[track_id]}"/>')
+            lines.append(f"{pad}</NODE>")
+        for segment, child in node.items():
+            if segment == "_playlists":
+                continue
+            child_count = self._count_children(child)
+            lines.append(
+                f'{pad}<NODE Type="0" Name={quoteattr(segment)} Count="{child_count}">'
+            )
+            lines += self._render_tree(child, keys, indent + 1)
+            lines.append(f"{pad}</NODE>")
+        return lines
+
+    @staticmethod
+    def _count_children(node):
+        return len(node["_playlists"]) + sum(
+            1 for segment in node if segment != "_playlists"
+        )
+
     def export_xml(self, output_path, folder_name=FOLDER_NAME):
-        """A single rekordbox.xml holding every playlist under one folder.
+        """A single rekordbox.xml holding every playlist under one folder,
+        nested by each playlist's folder_path (owner overrides win: Anto's
+        playlists land under "Anto", other owners under "baitadas").
 
         Imports the whole tree in one action and carries per-track metadata,
         which .m3u8 cannot. rekordbox still reads the XML as a separate,
@@ -101,14 +193,15 @@ class RekordboxExport:
         output_path = Path(output_path).expanduser().resolve()
         output_path.parent.mkdir(parents=True, exist_ok=True)
 
-        playlists = [(name, tracks) for name, tracks in self._playlists() if tracks]
-        skipped = [name for name, tracks in self._playlists() if not tracks]
+        all_playlists = self._playlists()
+        playlists = [(folder, name, tracks) for folder, name, tracks in all_playlists if tracks]
+        skipped = [name for _, name, tracks in all_playlists if not tracks]
 
         # rekordbox keys playlist entries by TrackID, so the collection is the
         # union of every playlist's tracks, numbered once.
         keys = {}
         collection = []
-        for _, tracks in playlists:
+        for _, _, tracks in playlists:
             for track_id, absolute in tracks:
                 if track_id not in keys:
                     keys[track_id] = len(keys) + 1
@@ -134,20 +227,16 @@ class RekordboxExport:
                 f"Location={quoteattr(_location_url(absolute))}",
             ]
             lines.append("    <TRACK " + " ".join(attributes) + "/>")
+        lines.append("  </COLLECTION>")
+
+        tree = self._folder_tree(playlists)
         lines += [
-            "  </COLLECTION>",
             "  <PLAYLISTS>",
             '    <NODE Type="0" Name="ROOT" Count="1">',
-            f'      <NODE Type="0" Name={quoteattr(folder_name)} Count="{len(playlists)}">',
+            f'      <NODE Type="0" Name={quoteattr(folder_name)} '
+            f'Count="{self._count_children(tree)}">',
         ]
-        for name, tracks in playlists:
-            lines.append(
-                f'        <NODE Name={quoteattr(name)} Type="1" KeyType="0" '
-                f'Entries="{len(tracks)}">'
-            )
-            for track_id, _ in tracks:
-                lines.append(f'          <TRACK Key="{keys[track_id]}"/>')
-            lines.append("        </NODE>")
+        lines += self._render_tree(tree, keys, indent=4)
         lines += ["      </NODE>", "    </NODE>", "  </PLAYLISTS>", "</DJ_PLAYLISTS>", ""]
 
         output_path.write_text("\n".join(lines), encoding="utf-8")
