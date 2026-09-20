@@ -23,13 +23,14 @@ def open_sp_session() -> sp_api.Spotify:
         t.error("no spotify credentials found, please provide them")
         return False
 
+    cache_handler = sp_api.CacheFileHandler(username=credentials["username"])
     auth = sp_api.SpotifyOAuth(
-        username=credentials["username"],
         client_id=credentials["client_id"],
         client_secret=credentials["client_secret"],
         scope=SPOTIFY_SCOPES,
         redirect_uri=credentials.get("redirect_uri", SPOTIFY_REDIRECT_URI),
         requests_timeout=2,
+        cache_handler=cache_handler,
     )
 
     
@@ -73,28 +74,20 @@ def open_td_session() -> td_api.Session:
     return session
 
 
-def save_sp_credentials(credentials: dict):
-    td = {}
+def _load_credentials() -> dict:
+    # Rebuilding this file from scratch silently destroys blocks these
+    # functions do not know about -- `discogs.token` was being wiped on every
+    # TIDAL session save. Always update in place.
     try:
-        td = Files.CREDENTIALS.load()["tidal"]
-    except:
-        td = {}
-        
-    Files.CREDENTIALS.save(
-        {
-            "spotify": {
-                "username": credentials["username"],
-                "client_id": credentials["client_id"],
-                "client_secret": credentials["client_secret"],
-                "scope": SPOTIFY_SCOPES,
-                "redirect_uri": credentials.get("redirect_uri", SPOTIFY_REDIRECT_URI),
-                "requests_timeout": 2,
-            },
-            "tidal": td,
-        }
-    )
-    pass
-    credentials = {
+        stored = Files.CREDENTIALS.load()
+    except Exception:
+        stored = None
+    return stored if isinstance(stored, dict) else {}
+
+
+def save_sp_credentials(credentials: dict):
+    stored = _load_credentials()
+    stored["spotify"] = {
         "username": credentials["username"],
         "client_id": credentials["client_id"],
         "client_secret": credentials["client_secret"],
@@ -102,19 +95,19 @@ def save_sp_credentials(credentials: dict):
         "redirect_uri": credentials.get("redirect_uri", SPOTIFY_REDIRECT_URI),
         "requests_timeout": 2,
     }
+    stored.setdefault("tidal", {})
+    Files.CREDENTIALS.save(stored)
+
 
 def save_td_session(session: td_api.Session):
-    Files.CREDENTIALS.save(
-        {
-            "spotify": Files.CREDENTIALS.load()["spotify"],
-            "tidal": {
-                "session_id": session.session_id,
-                "token_type": session.token_type,
-                "access_token": session.access_token,
-                "refresh_token": session.refresh_token,
-            },
-        }
-    )
+    stored = _load_credentials()
+    stored["tidal"] = {
+        "session_id": session.session_id,
+        "token_type": session.token_type,
+        "access_token": session.access_token,
+        "refresh_token": session.refresh_token,
+    }
+    Files.CREDENTIALS.save(stored)
 
 
 def get_td_session() -> td_api.Session:
