@@ -18,7 +18,8 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 CREATE TABLE IF NOT EXISTS tracks (
     track_id TEXT PRIMARY KEY, title TEXT NOT NULL, artist TEXT NOT NULL,
     album TEXT, album_artist TEXT, isrc TEXT, spotify_id TEXT, tidal_id TEXT,
-    year INTEGER, genre TEXT, style TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+    year INTEGER, genre TEXT, style TEXT, bpm REAL, musical_key TEXT,
+    created_at TEXT NOT NULL, updated_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS locations (
     location_id TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE, root_path TEXT NOT NULL,
@@ -34,7 +35,7 @@ CREATE TABLE IF NOT EXISTS files (
 CREATE TABLE IF NOT EXISTS playlists (
     playlist_id TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE,
     spotify_playlist_id TEXT, tidal_playlist_id TEXT, total_tracks INTEGER,
-    matched_tracks INTEGER,
+    matched_tracks INTEGER, owner TEXT, folder_path TEXT,
     created_at TEXT NOT NULL, updated_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS playlist_tracks (
@@ -88,6 +89,41 @@ CREATE TABLE IF NOT EXISTS track_genre_style (
 CREATE UNIQUE INDEX IF NOT EXISTS uq_track_genre_no_style
     ON track_genre_style (track_id, final_genre_id)
     WHERE style_id IS NULL;
+CREATE TABLE IF NOT EXISTS harvest_log (
+    track_id TEXT NOT NULL REFERENCES tracks(track_id),
+    source TEXT NOT NULL DEFAULT 'discogs',
+    attempts INTEGER NOT NULL DEFAULT 0,
+    last_attempt_at TEXT NOT NULL,
+    outcome TEXT NOT NULL,
+    PRIMARY KEY (track_id, source)
+);
+CREATE TABLE IF NOT EXISTS rym_release (
+    rym_release_id INTEGER PRIMARY KEY,
+    track_id TEXT NOT NULL REFERENCES tracks(track_id),
+    rym_path TEXT NOT NULL,
+    title TEXT,
+    artist TEXT,
+    year INTEGER,
+    confidence REAL,
+    match_method TEXT,
+    is_selected INTEGER NOT NULL DEFAULT 1,
+    review_status TEXT NOT NULL DEFAULT 'pending',
+    selection_method TEXT NOT NULL DEFAULT 'automatic',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE (track_id, rym_path)
+);
+CREATE INDEX IF NOT EXISTS idx_rym_release_track
+    ON rym_release(track_id);
+CREATE INDEX IF NOT EXISTS idx_rym_release_path
+    ON rym_release(rym_path);
+CREATE TABLE IF NOT EXISTS rym_release_genre (
+    rym_release_id INTEGER NOT NULL
+        REFERENCES rym_release(rym_release_id),
+    name TEXT NOT NULL,
+    kind TEXT NOT NULL CHECK (kind IN ('primary', 'secondary', 'descriptor')),
+    UNIQUE (rym_release_id, name, kind)
+);
 """
 
 FINAL_GENRE_SEED = [
@@ -166,6 +202,31 @@ def _normalize_match_text(text):
 _IMPORT_LOCK = threading.Lock()
 
 
+_CAMELOT_RE = re.compile(r"^(\d{1,2})([AB])$")
+
+
+def _camelot_related(key):
+    """Camelot-wheel keys that mix well with `key`: its relative major/minor
+    (same number, other letter) and its two adjacent perfect fifths (number
+    +-1, same letter)."""
+    match = _CAMELOT_RE.match((key or "").strip().upper())
+    if not match:
+        return set()
+    number, letter = int(match.group(1)), match.group(2)
+    other_letter = "B" if letter == "A" else "A"
+    related = {f"{number}{other_letter}"}
+    for delta in (-1, 1):
+        neighbor_number = ((number - 1 + delta) % 12) + 1
+        related.add(f"{neighbor_number}{letter}")
+    return related
+
+
+def camelot_related(key):
+    """Public, DB-free wrapper around `_camelot_related` for the search UI's
+    Camelot wheel lookup: sorted list of keys that mix well with `key`."""
+    return sorted(_camelot_related(key))
+
+
 def _year(value):
     try:
         return int(str(value)[:4]) if value else None
@@ -205,6 +266,10 @@ class MusicLibrary:
                 connection.execute("ALTER TABLE tracks ADD COLUMN genre TEXT")
             if "style" not in track_columns:
                 connection.execute("ALTER TABLE tracks ADD COLUMN style TEXT")
+            if "bpm" not in track_columns:
+                connection.execute("ALTER TABLE tracks ADD COLUMN bpm REAL")
+            if "musical_key" not in track_columns:
+                connection.execute("ALTER TABLE tracks ADD COLUMN musical_key TEXT")
             playlist_columns = {
                 row[1] for row in connection.execute("PRAGMA table_info(playlists)")
             }
@@ -212,6 +277,10 @@ class MusicLibrary:
                 connection.execute("ALTER TABLE playlists ADD COLUMN total_tracks INTEGER")
             if "matched_tracks" not in playlist_columns:
                 connection.execute("ALTER TABLE playlists ADD COLUMN matched_tracks INTEGER")
+            if "owner" not in playlist_columns:
+                connection.execute("ALTER TABLE playlists ADD COLUMN owner TEXT")
+            if "folder_path" not in playlist_columns:
+                connection.execute("ALTER TABLE playlists ADD COLUMN folder_path TEXT")
             release_columns = {
                 row[1] for row in connection.execute("PRAGMA table_info(discogs_release)")
             }
@@ -261,6 +330,31 @@ class MusicLibrary:
                     )
                 connection.execute("DROP TABLE track_genre_style")
                 _recreate_track_genre_style(connection)
+            harvest_log_columns = {
+                row[1] for row in connection.execute("PRAGMA table_info(harvest_log)")
+            }
+            if "source" not in harvest_log_columns:
+                # Pre-RYM harvest_log had PK (track_id) and only ever recorded
+                # the Discogs harvest; backfill the new column instead of
+                # losing the existing attempt counts.
+                connection.execute(
+                    """
+                    CREATE TABLE harvest_log_v2 (
+                        track_id TEXT NOT NULL REFERENCES tracks(track_id),
+                        source TEXT NOT NULL DEFAULT 'discogs',
+                        attempts INTEGER NOT NULL DEFAULT 0,
+                        last_attempt_at TEXT NOT NULL,
+                        outcome TEXT NOT NULL,
+                        PRIMARY KEY (track_id, source)
+                    )
+                    """
+                )
+                connection.execute(
+                    "INSERT INTO harvest_log_v2(track_id, source, attempts, last_attempt_at, outcome) "
+                    "SELECT track_id, 'discogs', attempts, last_attempt_at, outcome FROM harvest_log"
+                )
+                connection.execute("DROP TABLE harvest_log")
+                connection.execute("ALTER TABLE harvest_log_v2 RENAME TO harvest_log")
             for name in FINAL_GENRE_SEED:
                 connection.execute(
                     "INSERT OR IGNORE INTO final_genre(name) VALUES(?)", (name,)
@@ -287,6 +381,18 @@ class MusicLibrary:
             )
             connection.execute(
                 "INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES(6, ?)",
+                (_now(),),
+            )
+            connection.execute(
+                "INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES(7, ?)",
+                (_now(),),
+            )
+            connection.execute(
+                "INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES(8, ?)",
+                (_now(),),
+            )
+            connection.execute(
+                "INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES(9, ?)",
                 (_now(),),
             )
 
@@ -619,6 +725,236 @@ class MusicLibrary:
                 )
             ]
 
+    def import_rekordbox_metadata(self, entries):
+        """Matches rekordbox track exports against local files by absolute
+        path and stamps tracks.bpm/tracks.musical_key. `entries` is an
+        iterable of (file_path, bpm, key); either value may be None.
+        Returns {"matched", "unmatched"}.
+        """
+        matched = 0
+        unmatched = 0
+        now = _now()
+        with self._connect() as connection:
+            locations = connection.execute(
+                "SELECT location_id, root_path FROM locations"
+            ).fetchall()
+            resolved_locations = [
+                (location_id, Path(root_path).expanduser().resolve())
+                for location_id, root_path in locations
+            ]
+            for file_path, bpm, key in entries:
+                if bpm is None and key is None:
+                    continue
+                try:
+                    file_path = Path(file_path).expanduser().resolve()
+                except (OSError, RuntimeError, ValueError):
+                    unmatched += 1
+                    continue
+                track_id = None
+                for location_id, root_path in resolved_locations:
+                    try:
+                        relative = file_path.relative_to(root_path).as_posix()
+                    except ValueError:
+                        continue
+                    row = connection.execute(
+                        "SELECT track_id FROM files WHERE location_id=? AND path=?",
+                        (location_id, relative),
+                    ).fetchone()
+                    if row:
+                        track_id = row[0]
+                        break
+                if not track_id:
+                    unmatched += 1
+                    continue
+                connection.execute(
+                    "UPDATE tracks SET bpm=COALESCE(?, bpm), "
+                    "musical_key=COALESCE(?, musical_key), updated_at=? "
+                    "WHERE track_id=?",
+                    (bpm, key, now, track_id),
+                )
+                matched += 1
+        return {"matched": matched, "unmatched": unmatched}
+
+    def search_filter_options(self):
+        """Distinct values for the search UI's dropdowns."""
+        with self._connect() as connection:
+            genres = [
+                row[0] for row in connection.execute(
+                    "SELECT DISTINCT genre FROM tracks WHERE genre IS NOT NULL "
+                    "AND genre <> '' ORDER BY genre COLLATE NOCASE"
+                )
+            ]
+            styles = [
+                row[0] for row in connection.execute(
+                    "SELECT DISTINCT style FROM tracks WHERE style IS NOT NULL "
+                    "AND style <> '' ORDER BY style COLLATE NOCASE"
+                )
+            ]
+            keys = [
+                row[0] for row in connection.execute(
+                    "SELECT DISTINCT musical_key FROM tracks "
+                    "WHERE musical_key IS NOT NULL ORDER BY musical_key"
+                )
+            ]
+            playlists = [
+                row[0] for row in connection.execute(
+                    "SELECT name FROM playlists ORDER BY name COLLATE NOCASE"
+                )
+            ]
+        return {"genres": genres, "styles": styles, "keys": keys, "playlists": playlists}
+
+    def playlist_tree(self):
+        """Playlists nested by folder_path, e.g. {"_items": [{"name":...,
+        "count":...}], "_folders": {"parties": {"_items": [...], "_folders":
+        {}}}}, for a directory-style browser (mirrors
+        RekordboxExport._folder_tree's grouping). `count` is the number of
+        locally available tracks in that playlist."""
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT name, folder_path FROM playlists ORDER BY name COLLATE NOCASE"
+            ).fetchall()
+            counts = dict(connection.execute(
+                "SELECT p.name, COUNT(DISTINCT pt.track_id) FROM playlists p "
+                "JOIN playlist_tracks pt ON pt.playlist_id = p.playlist_id "
+                "JOIN files f ON f.track_id = pt.track_id AND f.missing_at IS NULL "
+                "GROUP BY p.name"
+            ).fetchall())
+        root = {"_items": [], "_folders": {}}
+        for name, folder_path in rows:
+            node = root
+            if folder_path:
+                for segment in folder_path.split("/"):
+                    if not segment:
+                        continue
+                    node = node["_folders"].setdefault(
+                        segment, {"_items": [], "_folders": {}}
+                    )
+            node["_items"].append({"name": name, "count": counts.get(name, 0)})
+        return root
+
+    def genre_counts(self):
+        """[{"name", "count"}] of genres with at least one locally available
+        track, for the search UI's Genres browser."""
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT t.genre, COUNT(DISTINCT t.track_id) FROM tracks t "
+                "JOIN files f ON f.track_id = t.track_id AND f.missing_at IS NULL "
+                "WHERE t.genre IS NOT NULL AND t.genre <> '' "
+                "GROUP BY t.genre ORDER BY t.genre COLLATE NOCASE"
+            ).fetchall()
+        return [{"name": name, "count": count} for name, count in rows]
+
+    def search_tracks(
+        self, query=None, artist=None, title=None, bpm_min=None, bpm_max=None,
+        key=None, genre=None, style=None, playlist=None, limit=300,
+    ):
+        """Local, available tracks matching the given filters (all optional
+        and combinable). `query` is a loose title/artist/album match; `artist`
+        and `title` narrow further, each against their own column only."""
+        sql = (
+            "SELECT DISTINCT t.track_id, t.title, t.artist, t.album, "
+            "t.bpm, t.musical_key, t.genre, t.style, t.year "
+            "FROM tracks t JOIN files f ON f.track_id = t.track_id "
+            "AND f.missing_at IS NULL "
+        )
+        where = []
+        params = []
+        if playlist:
+            sql += (
+                "JOIN playlist_tracks pt ON pt.track_id = t.track_id "
+                "JOIN playlists p ON p.playlist_id = pt.playlist_id "
+            )
+            where.append("p.name = ?")
+            params.append(playlist)
+        if query:
+            where.append("(t.title LIKE ? OR t.artist LIKE ? OR t.album LIKE ?)")
+            like = f"%{query}%"
+            params += [like, like, like]
+        if artist:
+            where.append("t.artist LIKE ?")
+            params.append(f"%{artist}%")
+        if title:
+            where.append("t.title LIKE ?")
+            params.append(f"%{title}%")
+        if bpm_min is not None:
+            where.append("t.bpm >= ?")
+            params.append(bpm_min)
+        if bpm_max is not None:
+            where.append("t.bpm <= ?")
+            params.append(bpm_max)
+        if key:
+            where.append("t.musical_key = ?")
+            params.append(key)
+        if genre:
+            where.append("t.genre = ?")
+            params.append(genre)
+        if style:
+            where.append("t.style = ?")
+            params.append(style)
+        if where:
+            sql += " WHERE " + " AND ".join(where)
+        sql += " ORDER BY t.artist COLLATE NOCASE, t.title COLLATE NOCASE LIMIT ?"
+        params.append(limit)
+        with self._connect() as connection:
+            rows = connection.execute(sql, params).fetchall()
+        return [
+            {
+                "track_id": row[0], "title": row[1], "artist": row[2],
+                "album": row[3], "bpm": row[4], "key": row[5],
+                "genre": row[6], "style": row[7], "year": row[8],
+            }
+            for row in rows
+        ]
+
+    def suggest_tracks(self, track_id, bpm_tolerance=0.06, limit=30):
+        """Local, available tracks ranked by how well they'd mix with
+        `track_id`: harmonic key compatibility (Camelot wheel), closeness in
+        BPM (within `bpm_tolerance`, a fraction of the seed BPM), and sharing
+        the seed's genre/style. Tracks with no signal in common are dropped.
+        """
+        with self._connect() as connection:
+            seed = connection.execute(
+                "SELECT bpm, musical_key, genre, style FROM tracks WHERE track_id = ?",
+                (track_id,),
+            ).fetchone()
+            if not seed:
+                return []
+            seed_bpm, seed_key, seed_genre, seed_style = seed
+            rows = connection.execute(
+                "SELECT DISTINCT t.track_id, t.title, t.artist, t.album, "
+                "t.bpm, t.musical_key, t.genre, t.style "
+                "FROM tracks t JOIN files f ON f.track_id = t.track_id "
+                "WHERE f.missing_at IS NULL AND t.track_id <> ? "
+                "AND (t.bpm IS NOT NULL OR t.musical_key IS NOT NULL)",
+                (track_id,),
+            ).fetchall()
+        related_keys = _camelot_related(seed_key)
+        scored = []
+        for row in rows:
+            track_id_, title, artist, album, bpm, key, genre, style = row
+            score = 0.0
+            if seed_key and key:
+                if key == seed_key:
+                    score += 3
+                elif key in related_keys:
+                    score += 2
+            if seed_bpm and bpm:
+                drift = abs(bpm - seed_bpm) / seed_bpm
+                if drift <= bpm_tolerance:
+                    score += 2 * (1 - drift / bpm_tolerance)
+            if seed_genre and genre and genre == seed_genre:
+                score += 1
+            if seed_style and style and style == seed_style:
+                score += 1
+            if score > 0:
+                scored.append((score, {
+                    "track_id": track_id_, "title": title, "artist": artist,
+                    "album": album, "bpm": bpm, "key": key, "genre": genre,
+                    "style": style, "score": round(score, 2),
+                }))
+        scored.sort(key=lambda pair: pair[0], reverse=True)
+        return [item for _, item in scored[:limit]]
+
     def set_track_genre(self, track_id, genre, style):
         with self._connect() as connection:
             connection.execute(
@@ -794,14 +1130,14 @@ class MusicLibrary:
 
     def upsert_playlist(
         self, name, spotify_playlist_id=None, tidal_playlist_id=None,
-        total_tracks=None, matched_tracks=None,
+        total_tracks=None, matched_tracks=None, owner=None,
     ):
         now = _now()
         playlist_id = str(uuid.uuid5(uuid.NAMESPACE_URL, f"spotidal:playlist:{name}"))
         with self._connect() as connection:
             connection.execute(
-                "INSERT INTO playlists(playlist_id,name,spotify_playlist_id,tidal_playlist_id,total_tracks,matched_tracks,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(name) DO UPDATE SET spotify_playlist_id=COALESCE(excluded.spotify_playlist_id, playlists.spotify_playlist_id), tidal_playlist_id=COALESCE(excluded.tidal_playlist_id, playlists.tidal_playlist_id), total_tracks=COALESCE(excluded.total_tracks, playlists.total_tracks), matched_tracks=COALESCE(excluded.matched_tracks, playlists.matched_tracks), updated_at=excluded.updated_at",
-                (playlist_id, name, spotify_playlist_id, tidal_playlist_id, total_tracks, matched_tracks, now, now),
+                "INSERT INTO playlists(playlist_id,name,spotify_playlist_id,tidal_playlist_id,total_tracks,matched_tracks,owner,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(name) DO UPDATE SET spotify_playlist_id=COALESCE(excluded.spotify_playlist_id, playlists.spotify_playlist_id), tidal_playlist_id=COALESCE(excluded.tidal_playlist_id, playlists.tidal_playlist_id), total_tracks=COALESCE(excluded.total_tracks, playlists.total_tracks), matched_tracks=COALESCE(excluded.matched_tracks, playlists.matched_tracks), owner=COALESCE(excluded.owner, playlists.owner), updated_at=excluded.updated_at",
+                (playlist_id, name, spotify_playlist_id, tidal_playlist_id, total_tracks, matched_tracks, owner, now, now),
             )
         return playlist_id
 

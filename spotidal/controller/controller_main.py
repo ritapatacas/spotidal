@@ -19,7 +19,8 @@ from ..model.genre import GenreFiller
 from ..model.flac_to_mp3 import FlacToMp3
 from ..model.normalize_audio import NormalizeToFlac
 from ..model.library import MusicLibrary
-from ..model.rekordbox import RekordboxExport
+from ..model.rekordbox import RekordboxExport, RekordboxImport
+from ..webui.server import run_server as run_search_server
 from ..model.library_watcher import LibraryWatcher
 from ..model.helpers.sync.playlists_handler import get_td_playlists_wrapper
 from ..model.helpers.tidalapi import get_all_playlist_tracks
@@ -555,6 +556,38 @@ class ControllerMain:
             " your playlists"
         ))
         return {"m3u8": len(playlists["written"]), **xml}
+
+    def import_rekordbox_metadata(self):
+        if not self._settings.get_database_enabled():
+            print(t.error("database is disabled"))
+            return
+        if not self._library:
+            self._require_local_directory(
+                self._settings.get_database_path(), "Database settings"
+            )
+            return
+        try:
+            source = RekordboxImport()
+        except RuntimeError as error:
+            print(t.error(str(error)))
+            return
+        result = self._library.import_rekordbox_metadata(source.tracks())
+        print(t.log(
+            f"bpm/key: matched {result['matched']} track(s), "
+            f"{result['unmatched']} unmatched"
+        ))
+        return result
+
+    def run_search_ui(self):
+        if not self._settings.get_database_enabled():
+            print(t.error("database is disabled"))
+            return
+        if not self._library:
+            self._require_local_directory(
+                self._settings.get_database_path(), "Database settings"
+            )
+            return
+        run_search_server(self._library)
 
     def reset_sp_session(self):
         sp_credentials = view.setup_menu()

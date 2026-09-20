@@ -83,6 +83,7 @@ class Controller:
                             "  download: pick playlists and download them\n"
                             "  sync: pick playlists and keep them in sync\n"
                             "  convert: convert downloaded FLAC files to MP3\n"
+                            "  search: browse/filter your local library and get mixing suggestions (opens a browser tab)\n"
                             "  utils: playlist selection, tmp cleanup, session refresh, database tools, rekordbox export\n"
                             "  settings: downloads and database configuration"
                         ))
@@ -150,6 +151,9 @@ class Controller:
 
                 elif menu == MainMenu.CONVERT[0]:
                     self._run_task(self.app.flac_to_mp3)
+
+                elif menu == MainMenu.SEARCH[0]:
+                    self._run_task(self.app.run_search_ui)
 
             except KeyboardInterrupt:
                 self.app.stop_library_monitoring()
@@ -307,6 +311,7 @@ class Controller:
             UtilsMenu.WATCH_PLAYLIST_FILES: self._watch_playlist_files,
             UtilsMenu.FIX_MISSING_DATA: lambda: self._run_task(self.app.fill_missing_database_data),
             UtilsMenu.FILL_GENRES: lambda: self._run_task(self.app.fill_genres),
+            UtilsMenu.IMPORT_REKORDBOX_BPM_KEY: lambda: self._run_task(self.app.import_rekordbox_metadata),
         })
 
     def _utils_genres(self):
@@ -315,6 +320,7 @@ class Controller:
             UtilsMenu.VIEW_GENRE_STYLES: self._view_genre_styles,
             UtilsMenu.ADD_GENRE_STYLE: self._add_genre_style,
             UtilsMenu.FILL_GENRES: self._fill_genres_scoped,
+            UtilsMenu.FILL_GENRES_RYM: self._harvest_rym_scoped,
         })
 
     def _view_genres(self):
@@ -399,6 +405,58 @@ class Controller:
         ))
         self._run_task(self.app.fill_genres, track_ids)
 
+    def _harvest_rym_scoped(self):
+        submenu = view.Submenu(UtilsMenu.FILL_GENRES_RYM, UtilsMenu.FILL_RYM_OPT)
+        while True:
+            action = submenu.display()
+            if action is None:
+                return
+            if action == UtilsMenu.FILL_SELECTED:
+                self._harvest_rym_scope("selection")
+            elif action == UtilsMenu.FILL_ALL:
+                self._harvest_rym_scope("all")
+            elif action == UtilsMenu.FILL_SELECT_PLAYLISTS:
+                names = view.select_menu(self.app.playlist_names())
+                if names:
+                    self._harvest_rym_scope(names)
+
+    def _harvest_rym_scope(self, scope):
+        from spotidal.model.settings import Settings
+        from spotidal.model.rym import RymTaxonomyFiller
+
+        settings = Settings()
+        if not settings.get_database_enabled():
+            print(t.error("database is disabled"))
+            return
+        values = settings.get_settings()
+        filler = RymTaxonomyFiller(
+            settings.get_database_path(),
+            max_pages=values.get("rymMaxPages", 80),
+            min_delay=values.get("rymMinDelay", 10),
+            max_delay=values.get("rymMaxDelay", 25),
+        )
+        if isinstance(scope, list):
+            rows = []
+            for name in scope:
+                rows.extend(_harvest_scope_rows(filler, name))
+            label = ", ".join(sorted(scope))
+        else:
+            rows = _harvest_scope_rows(filler, scope)
+            label = scope
+        if not rows:
+            print(t.warning(f"no tracks found for scope '{label}'"))
+            return
+        print(t.busy(f"rym harvest: {len(rows)} track(s) in scope '{label}'"))
+        try:
+            stats = self._run_task(_rym_harvest, filler, rows)
+        except Exception as error:
+            print(t.error(f"rym harvest failed: {error}"))
+            print(t.log(
+                "install the browser once with: poetry run playwright install chrome"
+            ))
+            return
+        _log_rym_stats(stats)
+
     def _notifications_settings(self):
         while True:
             action = view.notifications_settings_menu()
@@ -452,10 +510,177 @@ class Controller:
         return methods[scope]()
 
 
+def _parse_harvest_args(args):
+    source, scope, retry, max_calls, max_pages = "discogs", "selection", False, None, None
+    positional = []
+    index = 0
+    while index < len(args):
+        arg = args[index]
+        if arg == "--retry-unmatched":
+            retry = True
+        elif arg == "--max-calls":
+            index += 1
+            max_calls = int(args[index]) if index < len(args) else None
+        elif arg.startswith("--max-calls="):
+            max_calls = int(arg.split("=", 1)[1])
+        elif arg == "--max-pages":
+            index += 1
+            max_pages = int(args[index]) if index < len(args) else None
+        elif arg.startswith("--max-pages="):
+            max_pages = int(arg.split("=", 1)[1])
+        else:
+            positional.append(arg)
+        index += 1
+    if positional and positional[0] in ("discogs", "rym"):
+        source = positional.pop(0)
+    if positional:
+        scope = positional[0]
+    return source, scope, retry, max_calls, max_pages
+
+
+HARVEST_USAGE = (
+    "usage: spotidal harvest [selection|all|<playlist>] [--retry-unmatched] "
+    "[--max-calls N]\n"
+    "       spotidal harvest rym [selection|all|<playlist>] [--retry-unmatched] "
+    "[--max-pages N]"
+)
+
+
+def _harvest_scope_rows(filler, scope):
+    """Resolve a harvest scope string to (track_id, title, artist, album, year) rows."""
+    if scope == "selection":
+        return filler.selection_tracks()
+    if scope == "all":
+        return filler.all_tracks()
+    return [row[:5] for row in filler.playlist_tracks(scope)]
+
+
+def _rym_harvest(filler, rows, retry=False):
+    """Run the semi-assisted RYM harvest, always closing the browser at the end.
+
+    The real Chrome window opens lazily on the first request. SiteBlocked and
+    BudgetExhausted are handled inside ``filler.harvest`` and surface through
+    ``stats['stopped']`` instead of being raised.
+    """
+    print(t.warning(
+        "rym: opening a real Chrome window now; keep it visible and be ready "
+        "to resolve an 'I'm not a robot' challenge when one appears"
+    ))
+    try:
+        return filler.harvest(rows, retry_unmatched=retry)
+    finally:
+        filler.client.close()
+
+
+def _log_rym_stats(stats):
+    print(t.log(
+        f"rym harvest done: {stats['filled']} filled, "
+        f"{stats['skipped']} skipped, {stats['unmatched']} unmatched"
+    ))
+    stopped = stats["stopped"]
+    if stopped is not None:
+        print(t.warning(f"stopped early: {stopped}"))
+    return stopped
+
+
+def run_harvest_cli(args):
+    """Harvest taxonomy from an external service into the library database.
+
+    ``spotidal harvest rym ...`` runs the semi-assisted RYM harvest through a
+    real, visible Chrome window and needs a human nearby; ``spotidal harvest ...``
+    (no source) keeps meaning the fully unattended Discogs harvest, so the
+    existing cron/launchd jobs keep working unchanged.
+
+    Deliberately does not build the Controller: this job needs only the local
+    SQLite database. Opening Spotify/TIDAL sessions would add a slow startup
+    and, worse, `init_sessions` exits the process when TIDAL auth has gone
+    stale -- which would kill a 3am run for a reason that has nothing to do
+    with the harvest.
+    """
+    from spotidal.model.settings import Settings
+
+    try:
+        source, scope, retry, max_calls, max_pages = _parse_harvest_args(args)
+    except (ValueError, IndexError):
+        print(t.error(HARVEST_USAGE))
+        return 1
+
+    settings = Settings()
+    if not settings.get_database_enabled():
+        print(t.error("database is disabled"))
+        return 1
+    if source == "rym":
+        return _run_rym_harvest_cli(settings, scope, retry, max_pages)
+    return _run_discogs_harvest_cli(settings, scope, retry, max_calls)
+
+
+def _run_discogs_harvest_cli(settings, scope, retry, max_calls):
+    from spotidal.model.discogs import DiscogsTaxonomyFiller
+    from spotidal.model.genre import BudgetExhausted
+
+    filler = DiscogsTaxonomyFiller(settings.get_database_path(), max_calls=max_calls)
+    rows = _harvest_scope_rows(filler, scope)
+    if not rows:
+        print(t.warning(f"no tracks found for scope '{scope}'"))
+        return 0
+    print(t.busy(
+        f"harvest: {len(rows)} track(s) in scope '{scope}'"
+        f" ({'authenticated' if filler.client.authenticated else 'anonymous'})"
+    ))
+    stats = filler.harvest(rows, retry_unmatched=retry)
+    print(t.log(
+        f"harvest done: {stats['filled']} filled, {stats['skipped']} skipped, "
+        f"{stats['unmatched']} unmatched"
+    ))
+    stopped = stats["stopped"]
+    if stopped is None:
+        return 0
+    print(t.warning(f"stopped early: {stopped}"))
+    return 3 if isinstance(stopped, BudgetExhausted) else 2
+
+
+def _run_rym_harvest_cli(settings, scope, retry, max_pages):
+    from spotidal.model.rym import RymTaxonomyFiller
+    from spotidal.model.genre import BudgetExhausted
+
+    values = settings.get_settings()
+    filler = RymTaxonomyFiller(
+        settings.get_database_path(),
+        max_pages=(
+            max_pages if max_pages is not None else values.get("rymMaxPages", 80)
+        ),
+        min_delay=values.get("rymMinDelay", 10),
+        max_delay=values.get("rymMaxDelay", 25),
+    )
+    rows = _harvest_scope_rows(filler, scope)
+    if not rows:
+        print(t.warning(f"no tracks found for scope '{scope}'"))
+        return 0
+    print(t.busy(f"rym harvest: {len(rows)} track(s) in scope '{scope}'"))
+    try:
+        stats = _rym_harvest(filler, rows, retry)
+    except Exception as error:
+        print(t.error(f"rym harvest failed: {error}"))
+        print(t.log(
+            "install the browser once with: poetry run playwright install chrome"
+        ))
+        return 1
+    stopped = _log_rym_stats(stats)
+    if stopped is None:
+        return 0
+    return 3 if isinstance(stopped, BudgetExhausted) else 2
+
+
 def main():
     print(f"\n{t.red('Spotidal')}\n")
-    controller = Controller()
     args = sys.argv[1:]
+    if args and args[0] == "harvest":
+        try:
+            sys.exit(run_harvest_cli(args[1:]))
+        except KeyboardInterrupt:
+            print(t.log("interrupted; progress is saved, relaunch to resume"))
+            sys.exit(130)
+    controller = Controller()
     if args and args[0] == "doctor":
         scope = args[1] if len(args) > 1 else "all"
         try:

@@ -1,7 +1,8 @@
 import sqlite3
 from pathlib import Path
 
-from .genre import DiscogsClient
+from .genre import ApiUnavailable, BudgetExhausted, DiscogsClient
+from .helpers.type.file import Files
 from .library import _normalize_match_text, _now
 
 
@@ -14,10 +15,14 @@ class _StdoutReport:
 
 
 class DiscogsTaxonomyFiller:
-    def __init__(self, database_path, report=None):
+    def __init__(self, database_path, report=None, max_calls=None):
         self.database_path = Path(database_path).expanduser().resolve()
         self._report = report or _StdoutReport()
-        self._client = DiscogsClient(self._report)
+        self._client = DiscogsClient(self._report, max_calls=max_calls)
+
+    @property
+    def client(self):
+        return self._client
 
     def _connect(self):
         connection = sqlite3.connect(self.database_path)
@@ -44,19 +49,162 @@ class DiscogsTaxonomyFiller:
             )
         }
 
+    @staticmethod
+    def _search_queries(album, title):
+        # Same variant order as GenreFiller._search_strict: the raw album is
+        # the most specific, the cleaned one drops edition suffixes Discogs
+        # does not carry ("Mosquito (Deluxe)"), and the title covers singles
+        # and releases catalogued under the track name.
+        from .genre import clean_query
+
+        queries = []
+        for candidate in (album, clean_query(album or ""), title):
+            candidate = (candidate or "").strip()
+            if not candidate:
+                continue
+            if all(
+                _normalize_match_text(candidate) != _normalize_match_text(existing)
+                for existing in queries
+            ):
+                queries.append(candidate)
+        return queries
+
     def resolve(self, title, artist, album, isrc):
+        # Album search first, ISRC second. The ISRC route goes through
+        # MusicBrainz, which resolved to a Discogs release for only ~10% of
+        # this library while costing a 1.1s call on every track -- roughly an
+        # hour a night spent on the 90% that miss. The album search answers
+        # ~89% on its own, so ISRC is the fallback, not the entry point.
+        first_artist = (artist or "").split(",")[0].strip()
+        if first_artist:
+            for query in self._search_queries(album, title):
+                # Each variant gets its own cache key, so a cached miss on the
+                # raw "(Deluxe)" album does not hide a hit on the cleaned one.
+                cache_key = f"search:{_normalize_match_text(query)}||" \
+                            f"{_normalize_match_text(first_artist)}"
+                cached = self._client.cached(cache_key)
+                if cached is not None:
+                    matches = cached.get("matches", [])
+                else:
+                    matches = self._client.search_release(query, first_artist) or []
+                    self._client.store(cache_key, {"matches": matches[:5]})
+                if matches:
+                    return matches[0]["id"], "album_search", 0.8
         isrc = (isrc or "").strip()
         if isrc:
             release_id = self._client.isrc_to_discogs(isrc)
             if release_id:
                 return release_id, "isrc", 0.95
-        query = (album or "").strip() or (title or "").strip()
-        first_artist = (artist or "").split(",")[0].strip()
-        if query and first_artist:
-            matches = self._client.search_release(query, first_artist)
-            if matches:
-                return matches[0]["id"], "album_search", 0.8
         return None, None, None
+
+    # ---- unattended harvest -------------------------------------------------
+
+    MAX_UNMATCHED_ATTEMPTS = 3
+
+    def selection_tracks(self):
+        names = Files.SELECTION.load() or []
+        if not names:
+            return []
+        with self._connect() as connection:
+            placeholders = ",".join("?" for _ in names)
+            return connection.execute(
+                "SELECT DISTINCT t.track_id, t.title, t.artist, t.album, t.isrc "
+                "FROM playlists p "
+                "JOIN playlist_tracks pt ON pt.playlist_id = p.playlist_id "
+                "JOIN tracks t ON t.track_id = pt.track_id "
+                f"WHERE p.name IN ({placeholders}) "
+                "ORDER BY t.artist COLLATE NOCASE, t.album COLLATE NOCASE",
+                list(names),
+            ).fetchall()
+
+    def all_tracks(self):
+        # Selection first, everything else after. A night run can be cut short
+        # at any point, so the tracks the user actually cares about must be the
+        # ones already done when it is.
+        selected = self.selection_tracks()
+        seen = {row[0] for row in selected}
+        with self._connect() as connection:
+            rest = connection.execute(
+                "SELECT track_id, title, artist, album, isrc FROM tracks "
+                "ORDER BY artist COLLATE NOCASE, album COLLATE NOCASE"
+            ).fetchall()
+        return selected + [row for row in rest if row[0] not in seen]
+
+    HARVEST_SOURCE = "discogs"
+
+    def _harvest_state(self, connection):
+        return {
+            row[0]: (row[1], row[2])
+            for row in connection.execute(
+                "SELECT track_id, attempts, outcome FROM harvest_log WHERE source = ?",
+                (self.HARVEST_SOURCE,),
+            )
+        }
+
+    def _record_attempt(self, track_id, outcome):
+        with self._connect() as connection:
+            connection.execute(
+                "INSERT INTO harvest_log(track_id, source, attempts, last_attempt_at, outcome) "
+                "VALUES(?, ?, 1, ?, ?) "
+                "ON CONFLICT(track_id, source) DO UPDATE SET "
+                "attempts = attempts + 1, last_attempt_at = excluded.last_attempt_at, "
+                "outcome = excluded.outcome",
+                (track_id, self.HARVEST_SOURCE, _now(), outcome),
+            )
+
+    def _clear_attempt(self, connection, track_id):
+        connection.execute(
+            "DELETE FROM harvest_log WHERE track_id = ? AND source = ?",
+            (track_id, self.HARVEST_SOURCE),
+        )
+
+    def harvest(self, rows, retry_unmatched=False):
+        """Resolve tracks to Discogs releases and persist the taxonomy.
+
+        Writes only the discogs_* tables -- never tracks.genre/style and never
+        file tags. Safe to interrupt: progress lives in the database, so a
+        relaunch skips whatever is already done.
+        """
+        stats = {"filled": 0, "skipped": 0, "unmatched": 0, "stopped": None}
+        with self._connect() as connection:
+            already = self._bound_track_ids(connection)
+            state = self._harvest_state(connection)
+        for track_id, title, artist, album, isrc in rows:
+            if track_id in already:
+                stats["skipped"] += 1
+                continue
+            attempts, outcome = state.get(track_id, (0, None))
+            if (
+                not retry_unmatched
+                and outcome == "unmatched"
+                and attempts >= self.MAX_UNMATCHED_ATTEMPTS
+            ):
+                stats["skipped"] += 1
+                continue
+            try:
+                release_id, method, confidence = self.resolve(title, artist, album, isrc)
+                detail = self._client.release_detail(release_id) if release_id else None
+            except (ApiUnavailable, BudgetExhausted) as error:
+                # The API is unwell or the budget ran out. Neither is this
+                # track's fault, so leave its attempt count untouched and stop.
+                stats["stopped"] = error
+                break
+            if not detail or not detail.get("genres"):
+                stats["unmatched"] += 1
+                self._record_attempt(track_id, "unmatched")
+                continue
+            with self._connect() as connection:
+                self.store(
+                    connection, track_id, int(release_id), detail, method, confidence
+                )
+                self._clear_attempt(connection, track_id)
+            stats["filled"] += 1
+            self._report.log(
+                f"{title} - {artist} -> discogs:{release_id} "
+                f"[{', '.join(detail['genres'])} / {', '.join(detail['styles'])}] ({method})"
+            )
+        self._client.flush()
+        return stats
 
     def fill_playlist(self, name):
         done = skipped = unmatched = 0

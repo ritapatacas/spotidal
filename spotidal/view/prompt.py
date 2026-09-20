@@ -128,11 +128,12 @@ class MainMenu(MenuBase):
     SYNC = "sync", Prompt.LIST
     DOWNLOAD = "download", Prompt.LIST
     CONVERT = "convert", Prompt.LIST
+    SEARCH = "search", Prompt.LIST
     QUIT = "quit", Prompt.LIST
     UTILS = "utils", Prompt.LIST
     SETTINGS = "settings", Prompt.LIST
 
-    MAIN_OPT = [DOWNLOAD, SYNC, CONVERT, UTILS, SETTINGS, QUIT]
+    MAIN_OPT = [DOWNLOAD, SYNC, SEARCH, CONVERT, UTILS, SETTINGS, QUIT]
 
     def __init__(self):
         super().__init__(Prompt.LIST)
@@ -204,7 +205,9 @@ class UtilsMenu(MenuBase):
     CONVERT_TO_FLAC = "convert non-flac files to flac"
     FIX_MISSING_DATA = "fix missing data (update db)"
     FILL_GENRES = "fill genres from discogs (tags+db)"
+    FILL_GENRES_RYM = "fill genres from rate your music (browser)"
     EXPORT_REKORDBOX = "export playlists for rekordbox (xml+m3u8)"
+    IMPORT_REKORDBOX_BPM_KEY = "import bpm/key from rekordbox (update db)"
     BACK = "back"
 
     PLAYLISTS = "playlists"
@@ -228,20 +231,23 @@ class UtilsMenu(MenuBase):
     ]
     DATABASE_OPT = [
         DOCTOR_PLAYLISTS, RUN_WATCHER, WATCH_PLAYLIST_FILES,
-        FIX_MISSING_DATA, FILL_GENRES,
+        FIX_MISSING_DATA, FILL_GENRES, IMPORT_REKORDBOX_BPM_KEY,
     ]
     VIEW_GENRES = "view genres"
     VIEW_GENRE_STYLES = "view genre styles"
     ADD_GENRE_STYLE = "add genre and/or style"
     GENRES_OPT = [
-        VIEW_GENRES, VIEW_GENRE_STYLES, ADD_GENRE_STYLE, FILL_GENRES,
+        VIEW_GENRES, VIEW_GENRE_STYLES, ADD_GENRE_STYLE,
+        FILL_GENRES, FILL_GENRES_RYM,
     ]
     ALL_GENRES = "all genres"
     SELECT_GENRE = "select genre"
     VIEW_STYLES_OPT = [ALL_GENRES, SELECT_GENRE]
     FILL_SELECTED = "selected"
+    FILL_ALL = "all"
     FILL_SELECT_PLAYLISTS = "select playlists"
     FILL_GENRES_OPT = [FILL_SELECTED, FILL_SELECT_PLAYLISTS]
+    FILL_RYM_OPT = [FILL_SELECTED, FILL_ALL, FILL_SELECT_PLAYLISTS]
 
     def __init__(self):
         super().__init__(Prompt.LIST)

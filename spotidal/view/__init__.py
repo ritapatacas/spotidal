@@ -3,6 +3,7 @@ from .prompt import (
     MainMenu,
     SelectionModeMenu,
     SettingsMenu,
+    DefaultSelectionMenu,
     SearchMenu,
     SelectMenu,
     URLMenu,
@@ -21,7 +22,5 @@ __all__ = [
     "URLMenu",
     "DefaultSelectionMenu",
     "SaveSelectionMenu",
-    "get_string",
-    "format_string",
     "Text",
 ]

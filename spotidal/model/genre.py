@@ -116,7 +116,11 @@ SUBSTRING_RULES = [
     ("salsa", "Latin"), ("samba", "Latin"), ("bossa", "Latin"),
     ("merengue", "Latin"), ("cumbia", "Latin"), ("tango", "Latin"),
     ("reggaeton", "Latin"), ("mpb", "Latin"), ("latin", "Latin"), ("afro", "Afro"),
+    # "Pop Rock" has to beat the bare "pop" rule below, or the same band lands
+    # in Pop or Rock depending on which style Discogs happens to list first.
+    ("pop rock", "Rock"),
     ("punk", "Rock"), ("metal", "Rock"), ("grunge", "Rock"),
+    ("psychedelic rock", "Rock"), ("classic rock", "Rock"), ("indie rock", "Rock"),
     ("synth-pop", "Pop"), ("pop", "Pop"),
     ("world", "Folk & World"), ("folk", "Folk & World"),
     ("opera", "Classical"), ("orchestra", "Classical"), ("choral", "Classical"),
@@ -149,24 +153,67 @@ def _norm(text):
 _TRAILING_PARENTHESIS = re.compile(r"\s*[\(\[][^\)\]]*[\)\]]\s*$")
 
 
+# Edition markers TIDAL appends to an album title that Discogs does not carry:
+# "Energy Deluxe" has to become "Energy" before release_title will match.
+_EDITION_SUFFIX = re.compile(
+    r"\s*(?:[-\u2013\u2014,]\s*)?\b("
+    r"deluxe(?:\s+edition)?|expanded(?:\s+edition)?|special\s+edition|"
+    r"anniversary\s+edition|extended(?:\s+(?:mix|version|edition))?|"
+    r"remaster(?:ed)?(?:\s+\d{4})?|\d{4}\s+remaster(?:ed)?|"
+    r"bonus\s+track\s+version|explicit|clean|single|ep|"
+    r"original\s+mix|radio\s+edit"
+    r")\b\s*$",
+    re.IGNORECASE,
+)
+
+
 def clean_query(text):
     # "(Radio Edit)", "(Original Mix)", "(Remix)"... break Discogs'
-    # release_title matching, so retry searches with them stripped.
+    # release_title matching, so retry searches with them stripped. The same
+    # markers also appear unbracketed ("Energy Deluxe"), so strip both forms.
     text = (text or "").strip()
     while True:
         stripped = _TRAILING_PARENTHESIS.sub("", text).strip()
+        stripped = _EDITION_SUFFIX.sub("", stripped).strip()
         if stripped == text:
             return text
         text = stripped
+
+
+def _tokens(text):
+    return set(_norm(text).split())
+
+
+class ApiUnavailable(Exception):
+    """A host failed for long enough that the run should stop and checkpoint."""
+
+
+class BudgetExhausted(Exception):
+    """The run hit its configured call budget."""
 
 
 class DiscogsClient:
     DISCOGS_INTERVAL = 2.6
     DISCOGS_INTERVAL_AUTH = 1.2
     MB_INTERVAL = 1.1
+    # Circuit breaker: consecutive API-side failures pause the host for
+    # 1, 2, 4, 8, 16 min (capped), and this many pauses without a single
+    # success ends the run rather than hammering a service that is down.
+    BREAKER_BACKOFF = (60, 120, 240, 480, 960)
+    BREAKER_MAX_PAUSE = 1800
+    BREAKER_GIVE_UP_AFTER = 5
+    # The cache holds every search hit *and* miss, so a resumed run is cheap --
+    # but only if it reached disk. Checkpoint periodically instead of once at
+    # the end, or a crash throws away a whole night of calls.
+    CHECKPOINT_EVERY = 50
 
-    def __init__(self, report):
+    def __init__(self, report, max_calls=None):
         self._report = report
+        self._max_calls = max_calls
+        self._breaker = {
+            host: {"failures": 0, "pauses": 0}
+            for host in ("discogs", "musicbrainz")
+        }
         credentials = Files.CREDENTIALS.load() or {}
         self._token = ((credentials.get("discogs") or {}).get("token") or "").strip()
         self._intervals = {
@@ -223,27 +270,64 @@ class DiscogsClient:
                 time.sleep(wait)
             self._last[host] = time.monotonic()
 
+    def _api_failure(self, host, reason):
+        # Only the service being unwell reaches here: a 404 or an empty result
+        # set is the record missing, not the API failing, and must not trip
+        # the breaker or the whole run would stop on ordinary misses.
+        state = self._breaker[host]
+        state["failures"] += 1
+        index = min(state["pauses"], len(self.BREAKER_BACKOFF) - 1)
+        pause = min(self.BREAKER_BACKOFF[index], self.BREAKER_MAX_PAUSE)
+        state["pauses"] += 1
+        if state["pauses"] > self.BREAKER_GIVE_UP_AFTER:
+            raise ApiUnavailable(
+                f"{host} still failing after {self.BREAKER_GIVE_UP_AFTER} "
+                f"backoffs ({reason}); stopping so the run can be resumed later"
+            )
+        self._report.warn(
+            f"{host} unhealthy ({reason}); pausing {pause // 60}m "
+            f"[{state['pauses']}/{self.BREAKER_GIVE_UP_AFTER}]"
+        )
+        time.sleep(pause)
+
+    def _api_success(self, host):
+        self._breaker[host].update(failures=0, pauses=0)
+
     def _get(self, url, headers):
-        self._throttle(self._host(url))
+        host = self._host(url)
+        self._throttle(host)
         with self._calls_lock:
+            if self._max_calls is not None and self._calls >= self._max_calls:
+                raise BudgetExhausted(f"reached the {self._max_calls} call budget")
             self._calls += 1
+            due = self._calls % self.CHECKPOINT_EVERY == 0
+        if due:
+            self._save_cache()
         for attempt in range(3):
             try:
                 request = urllib.request.Request(url, headers=headers)
                 with urllib.request.urlopen(request, timeout=20) as response:
-                    return json.load(response)
+                    data = json.load(response)
+                self._api_success(host)
+                return data
             except urllib.error.HTTPError as error:
-                if error.code in (429, 503) and attempt < 2:
-                    time.sleep(5 * (attempt + 1))
-                    continue
                 if error.code == 404:
+                    # The record does not exist. That is an answer, not an outage.
+                    self._api_success(host)
+                    return None
+                if error.code in (429, 503) or error.code >= 500:
+                    if attempt < 2:
+                        time.sleep(5 * (attempt + 1))
+                        continue
+                    self._api_failure(host, f"HTTP {error.code}")
                     return None
                 raise
-            except urllib.error.URLError:
+            except urllib.error.URLError as error:
                 if attempt < 2:
                     time.sleep(2 * (attempt + 1))
                     continue
-                raise
+                self._api_failure(host, f"{type(error).__name__}")
+                return None
         return None
 
     def _discogs_headers(self):
@@ -260,16 +344,26 @@ class DiscogsClient:
         with self._cache_lock:
             self._cache[key] = value
 
-    def _parse_results(self, results, target, artist, strict):
+    def _parse_results(self, results, target, artist, strict, limit=10):
         matches = []
-        for item in results[:10]:
+        for item in results[:limit]:
             parts = re.split(r"\s+[\u2013\u2014-]\s+", item.get("title", ""), maxsplit=1)
             rel_title = parts[-1] if len(parts) > 1 else item.get("title", "")
             rel_artists = parts[0] if len(parts) > 1 else ""
-            exact = target is not None and _norm(rel_title) == target and (
-                not rel_artists or _norm(artist) in _norm(rel_artists)
+            artist_ok = not rel_artists or _norm(artist) in _norm(rel_artists)
+            # An exact normalized title is the strongest signal, but Discogs
+            # drops edition markers and feat. credits the tag still carries, so
+            # also accept a release whose title is a token-subset of the query
+            # ("Energy" for a tagged "Energy Deluxe"). Subset hits stay flagged
+            # as non-exact and are ranked below exact ones.
+            rel_tokens = _tokens(rel_title)
+            subset = bool(
+                target and rel_tokens
+                and rel_tokens <= set(target.split())
             )
-            if exact or not strict:
+            exact = target is not None and _norm(rel_title) == target and artist_ok
+            near = subset and artist_ok
+            if exact or near or not strict:
                 matches.append({
                     "id": item["id"],
                     "title": item.get("title", ""),
@@ -280,7 +374,9 @@ class DiscogsClient:
                     "genres": item.get("genre") or [],
                     "styles": item.get("style") or [],
                     "exact": exact,
+                    "near": near,
                 })
+        matches.sort(key=lambda m: (not m["exact"], not m["near"]))
         return matches
 
     def search_release(self, album, artist, strict=True):
@@ -294,12 +390,14 @@ class DiscogsClient:
             (data or {}).get("results", []), _norm(album), artist, strict
         )
 
-    def search_artist_releases(self, artist):
+    def search_artist_releases(self, artist, limit=10):
         query = urllib.parse.urlencode({"artist": artist, "type": "release"})
         data = self._get(
             "https://api.discogs.com/database/search?" + query, self._discogs_headers()
         )
-        return self._parse_results((data or {}).get("results", []), None, artist, False)
+        return self._parse_results(
+            (data or {}).get("results", []), None, artist, False, limit=limit
+        )
 
     def release_detail(self, release_id, force=False):
         cache_key = f"release:{release_id}"

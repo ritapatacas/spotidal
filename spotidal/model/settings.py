@@ -14,6 +14,9 @@ DEFAULTS = {
     "watcherEnabled": True,
     "otherLocations": [],
     "notifySoundAfterMinutes": 5,
+    "rymMinDelay": 10,
+    "rymMaxDelay": 25,
+    "rymMaxPages": 80,
     "tidekeeper": {
         "includeEP": False,
         "saveCovers": True,
