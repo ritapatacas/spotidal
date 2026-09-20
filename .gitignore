@@ -3,3 +3,4 @@
 **/__pycache__/*
 credentials.yml
 download/**
+.DS_Store
