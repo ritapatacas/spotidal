@@ -54,6 +54,19 @@ everything else through it or by importing model modules directly.
 | `text.py` | 105 | `Text` — **all** colored terminal output. |
 | `strings.py`, `setup.py`, `sound.py`, `inquirer_keys.py` | small | Literals, first-run credential prompts, notification sound, keybindings. |
 
+## Web UI — `spotidal/webui/`
+
+| Module | ~Lines | Role |
+| --- | --- | --- |
+| `server.py` | 96 | `run_server(library, ...)`: a stdlib `ThreadingHTTPServer`, loopback by default (`127.0.0.1:8383`). Serves the page and a small JSON API (`/api/options`, `/api/playlist-tree`, `/api/genre-counts`, `/api/tracks`, `/api/suggest`, `/api/camelot`) straight over `MusicLibrary` — no model beyond it. |
+| `page.py` | 1133 | Single-file HTML/CSS/JS (retro Windows-95-styled) for two views: `/` a filterable track browser (genre/style/key/BPM/playlist), `/suggest` a per-track DJ mix-suggestion view (harmonic/BPM/genre matches, via `MusicLibrary.suggest_tracks`). No build step, no framework — it's a literal string served as-is. |
+
+Entry point: `ControllerMain.run_search_ui()` (`controller_main.py`) → `MainMenu.SEARCH`
+in the top-level menu (`controller.py`). Requires the local database
+(`databaseEnabled` setting) and blocks the terminal until Ctrl+C, same as any other
+menu action — it does not run in the background. Opens the user's browser
+automatically unless `open_browser=False`.
+
 ## External boundaries
 
 Four processes/services sit outside the code and are the usual source of failure:

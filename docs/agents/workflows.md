@@ -193,3 +193,28 @@ Exit codes match the Discogs harvest: `0` finished, `2` the site blocked the run
 challenge went unresolved, `3` the page budget was exhausted. `harvest` with no source
 token still means the unattended Discogs harvest, so existing cron/launchd jobs are
 unchanged.
+
+## 6. The local search UI
+
+```
+MainMenu "search"                          spotidal/view/prompt.py
+  → Controller.run loop                    spotidal/controller/controller.py
+  → ControllerMain.run_search_ui()         spotidal/controller/controller_main.py
+  → run_server(library)                    spotidal/webui/server.py
+      ThreadingHTTPServer on 127.0.0.1:8383, opens the browser, blocks until Ctrl+C
+      GET /            → page.py PAGE_HTML           track browser
+      GET /suggest     → page.py SUGGEST_PAGE_HTML    per-track mix suggestions
+      GET /api/*       → MusicLibrary.search_filter_options / playlist_tree /
+                          genre_counts / search_tracks / suggest_tracks / camelot_related
+```
+
+Requires `databaseEnabled` and a resolvable local directory — same guard as every other
+`ControllerMain` method touching `self._library`; see `run_search_ui()`'s early returns.
+There is no auth and no CORS handling because the server only ever binds loopback; do
+not change `host` without treating that as a security-relevant change.
+
+`suggest_tracks()` (`library.py`) ranks candidates by Camelot-wheel key compatibility,
+BPM closeness (within a tolerance fraction of the seed BPM), and shared genre/style —
+mirroring how a DJ would judge a mix by ear, not a generic "similar tracks" measure.
+BPM/key come from `RekordboxImport` (`rekordbox.py`), so this view is only useful for
+tracks Rekordbox has already analyzed.

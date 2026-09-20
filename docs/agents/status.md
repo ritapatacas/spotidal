@@ -102,13 +102,20 @@ and there is no history for it: a local web/API layer existed on this machine an
 never committed. Do not attempt to reconstruct it from the bytecode. If a web layer is
 wanted again, it should be written fresh.
 
+**Do not confuse this with `spotidal/webui/`** (added 2026-09-20), which is a live,
+wired-in, unrelated module — the `search` menu's local track browser / DJ mix-suggestion
+UI. See [architecture.md](architecture.md#web-ui--spotidalwebui).
+
 ## Uncommitted work in flight
 
-The tree currently carries uncommitted changes on top of `08f0e6b`. Untracked:
-`PLANO_RYM_GENEROS.md` and `spotidal/model/rym.py`. Modified: `controller.py` (the
-`harvest` CLI now dispatches Discogs/`rym` and the Utils menu gained the RYM entry),
-`library.py`, `settings.py`, `model/genre.py`, `model/discogs.py`, `model/auth.py`,
-`view/__init__.py`, plus the `docs/agents/` updates recorded above.
+As of 2026-09-20, `spotidal/webui/` (`server.py`, `page.py`, `__init__.py`) is untracked
+despite being fully wired in — `controller_main.py` imports and calls it, and the
+`search` menu entry reaches it. It works (`poetry run python -m compileall` and manual
+launch both succeed); it's simply never been committed. `library.py`'s
+`search_filter_options`/`playlist_tree`/`genre_counts`/`search_tracks`/`suggest_tracks`
+and the `bpm`/`musical_key` columns it depends on **are** committed, from the RYM
+harvest batch — so the DB side of this feature predates and outlives its own UI's
+commit status.
 
 Check `git status` before assuming the committed history reflects what is on disk.
 

@@ -14,7 +14,10 @@ Poetry) that:
 - indexes the resulting local audio files in a **SQLite music library**,
 - and runs "doctor" diagnostics over that library (missing tracks, MP3 quality, …).
 
-It is not a service and has no HTTP API. There is no UI beyond InquirerPy prompts.
+It is not a service and exposes no external API. The primary UI is InquirerPy
+prompts; the `search` menu item is the one exception — it launches a local,
+loopback-only web UI (`spotidal/webui/`) for browsing/searching the library and
+getting DJ mix suggestions. See [architecture.md](docs/agents/architecture.md).
 
 ## Running it
 
@@ -37,6 +40,7 @@ Loose MVC, with the dependency direction `controller → model` and `controller 
 | `spotidal/controller/` | Orchestration. `ControllerMain` holds most application logic. |
 | `spotidal/model/` | Data, persistence, and all external services (Spotify, TIDAL, Discogs, ffmpeg). |
 | `spotidal/view/` | Terminal only — InquirerPy menus and colored output. Holds no logic. |
+| `spotidal/webui/` | Local search UI: a stdlib `http.server` (`server.py`) serving a single-file HTML/JS page (`page.py`) against `MusicLibrary`. Only path with an HTTP surface, and it's loopback-only, launched on demand from the `search` menu. |
 
 `view` must never import from `model`. Menus return plain strings; the controller
 decides what they mean.
