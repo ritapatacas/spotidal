@@ -48,14 +48,7 @@ likewise partly built as `run_mp3_quality_doctor`.
 
 None of these were repaired as part of writing this documentation:
 
-- `spotidal/view/__init__.py` lists `DefaultSelectionMenu`, `get_string` and
-  `format_string` in `__all__` without importing them — a star-import from that package
-  raises `AttributeError`.
 - `spotidal/model/config.py` is a 0-byte file.
-- `MANIFEST.in` references `requirements.txt`, which does not exist, so the sdist
-  manifest is broken.
-- `.claude/settings.local.json` allowlists `spotidal/web/api/playlists.py` and
-  `spotidal/web/static/app.js` — neither exists.
 - `pyproject.toml` declares dependencies nothing imports (`redis`, `mpegdash`,
   `ratelimit`, `isodate`, `colorama`, `greenlet`, `six`, `pfzy`, `wcwidth`), while the
   binaries the app actually shells out to are declared nowhere.
@@ -63,6 +56,43 @@ None of these were repaired as part of writing this documentation:
   `PlaylistController()` with no arguments and would fail.
 - Loose files sit at the repo root that arguably should not: `.cache.db`,
   `.cache-1138870920`, `credentials.yml`, and a `download/` tree of real audio.
+
+## Fixed on 2026-09-07
+
+Recorded here so the history is not lost:
+
+- `spotidal/view/__init__.py` listed `DefaultSelectionMenu`, `get_string` and
+  `format_string` in `__all__` without importing them, so `from spotidal.view import *`
+  raised `AttributeError`. `DefaultSelectionMenu` is now imported; `get_string` and
+  `format_string` were removed — neither exists anywhere in the codebase.
+- `MANIFEST.in` referenced a nonexistent `requirements.txt`; the line was removed.
+- `.claude/settings.local.json` allowlisted four commands belonging to the deleted
+  `spotidal/web/` layer (two paths under it, two `curl` calls to `127.0.0.1:8888`).
+  All four were removed.
+
+## Added on 2026-09-08 — the Rate Your Music harvest
+
+Fases 0–6 of `PLANO_RYM_GENEROS.md` are now implemented except the *review queue* and the
+`final_genre` mapping (Fase 5 of the plan, deliberately deferred until the real RYM genre
+distribution is visible):
+
+- `spotidal/model/rym.py` (`RymClient` + `RymTaxonomyFiller`): Playwright over a real,
+  visible, persistent Chrome profile (`~/.config/spotidal/rym-profile/`), release-level
+  dedup, JSON cache, pacing, challenge-pause-for-human, `SiteBlocked`/`BudgetExhausted`.
+- Schema in `library.py`: `rym_release`, `rym_release_genre`, and `harvest_log` rebuilt
+  with PK `(track_id, source)`, back-filling existing Discogs rows with `source='discogs'`.
+- CLI: `spotidal harvest rym [selection|all|<playlist>] [--retry-unmatched]
+  [--max-pages N]`. `harvest` without a source keeps meaning Discogs — existing
+  cron/launchd jobs are untouched. Exit codes: `0` done, `2` blocked/unresolved
+  challenge, `3` page budget exhausted.
+- Menu: Utils → genres → "fill genres from rate your music (browser)" (scope submenu:
+  selected / all / select playlists).
+- Settings: `rymMinDelay` (10), `rymMaxDelay` (25), `rymMaxPages` (80) in `DEFAULTS`.
+- `pyproject.toml` gained `playwright`; the browser itself is a hard requirement
+  (see `AGENTS.md`): `poetry run playwright install chrome`.
+
+Still open (planned, not built): the manual review queue for low-confidence RYM matches,
+and the vocabulary mapping from RYM labels into `final_genre`/`track_genre_style`.
 
 ## `spotidal/web/` — deleted, not dormant
 
@@ -74,11 +104,11 @@ wanted again, it should be written fresh.
 
 ## Uncommitted work in flight
 
-At the time of writing the tree carries roughly 2.3k uncommitted lines. Untracked:
-`spotidal/model/discogs.py`, `doctor.py`, `genre.py`, `rekordbox.py`, and
-`spotidal/view/sound.py`. Modified: `controller.py`, `controller_main.py`,
-`download.py`, `flac_to_mp3.py`, `helpers/td_downloader.py`, `library.py`,
-`settings.py`, `view/prompt.py`, `view/view.py`.
+The tree currently carries uncommitted changes on top of `08f0e6b`. Untracked:
+`PLANO_RYM_GENEROS.md` and `spotidal/model/rym.py`. Modified: `controller.py` (the
+`harvest` CLI now dispatches Discogs/`rym` and the Utils menu gained the RYM entry),
+`library.py`, `settings.py`, `model/genre.py`, `model/discogs.py`, `model/auth.py`,
+`view/__init__.py`, plus the `docs/agents/` updates recorded above.
 
 Check `git status` before assuming the committed history reflects what is on disk.
 

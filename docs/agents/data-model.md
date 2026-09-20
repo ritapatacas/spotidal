@@ -28,6 +28,8 @@ existing database to be dropped.
 | `playlist_tracks` | `PRIMARY KEY (playlist_id, track_id)` | Membership only — **no position column**, playlist order is not stored. |
 | `genre`, `style` | name tables | Vocabulary. |
 | `discogs_release`, `discogs_release_genre_style` | | Cached Discogs lookups. |
+| `rym_release`, `rym_release_genre` | | Cached Rate Your Music lookups. `rym_path` (e.g. `/release/album/artist/title/`) is the stable identity. |
+| `harvest_log` | `PK (track_id, source)`, `attempts`, `outcome` | One row per (track, harvest). `source` is `'discogs'` or `'rym'`; the two harvests never share attempt counts. |
 | `final_genre`, `track_genre_style` | | The resolved genre/style assigned to a track. |
 
 ### Two constraints to know before you write DB code
@@ -39,6 +41,11 @@ existing database to be dropped.
 - **`missing_at`** marks a file whose path disappeared from disk. A file only counts as
   locally present when `missing_at IS NULL`. Reconciliation sets and clears it; nothing
   deletes `files` rows on the strength of a single failed scan.
+- **Discogs and RYM vocabulary never mixes.** `discogs_release_genre_style` and
+  `rym_release_genre` are separate taxonomies on purpose — RYM labels (`primary`,
+  `secondary`, `descriptor`) do not map 1:1 to Discogs genres/styles, and mixing them
+  would pollute `bucket_for()` and the final classifications. Neither harvest writes to
+  `tracks.genre`/`tracks.style` or to file tags; only `GenreFiller` does that.
 
 ## Existing `MusicLibrary` API — check here before adding a method
 

@@ -7,7 +7,7 @@ weight sits — use them to judge what is a hub and what is a leaf.
 
 | Module | ~Lines | Role |
 | --- | --- | --- |
-| `controller.py` | 473 | `Controller`: session bootstrap (Spotify + TIDAL), the top-level menu loop, `run_doctor()`, and `main()`. This is the entry point. |
+| `controller.py` | 693 | `Controller`: session bootstrap (Spotify + TIDAL), the top-level menu loop, `run_doctor()`, `main()`, and the whole `spotidal harvest` CLI (Discogs *and* RYM sources). This is the entry point. |
 | `controller_main.py` | 649 | `ControllerMain`: **the real hub.** Download dir, sync/download entry, library monitoring, selection stats, all doctor wrappers, genres, Rekordbox export, every settings mutation. Most feature work lands here. |
 | `playlist_controller.py` | 37 | Thin resolver from a playlist reference to a Spotify playlist. |
 
@@ -22,7 +22,8 @@ everything else through it or by importing model modules directly.
 | `library.py` | 968 | `MusicLibrary` — SQLite schema, migrations, file import, playlist/track persistence, reconciliation, genre storage. See [data-model.md](data-model.md). |
 | `genre.py` | 788 | Genre/style resolution and tag writing. |
 | `doctor.py` | 784 | `Doctor` + `DoctorReport`: the four diagnostics. |
-| `discogs.py` | 554 | Discogs API client feeding `genre.py`. |
+| `discogs.py` | 702 | Discogs API client feeding `genre.py`; the unattended taxonomy harvest. |
+| `rym.py` | 550 | **Semi-assisted** Rate Your Music harvest: `RymClient` (Playwright over a real Chrome profile) + `RymTaxonomyFiller`. Never unattended, never blocks on its own. See [workflows.md](workflows.md). |
 | `download.py` | 434 | `Download`: by TIDAL id, by URL, by playlist; batching and progress. |
 | `auth.py` | 157 | Spotify/TIDAL session open, save, refresh. |
 | `settings.py` | 164 | `Settings` + the `DEFAULTS` dict. Single source of truth for settings keys. |
@@ -62,6 +63,12 @@ Four processes/services sit outside the code and are the usual source of failure
    falls back to an interactive `tidekeeper` login.
 3. **`tidal-dl-ng` / `tidekeeper` subprocess** — the actual downloader.
 4. **`ffmpeg` / `ffprobe` subprocesses** — conversion, normalization, MP3 inspection.
+5. **Google Chrome via Playwright** (`spotidal/model/rym.py`) — a real, visible
+   browser with a persistent profile under `~/.config/spotidal/rym-profile/`. RYM has
+   no API and blocks plain HTTP clients, so every request is a real page load. The
+   `playwright` package is declared in `pyproject.toml`; the browser binary is not
+   (`poetry run playwright install chrome`).
 
-Anything crossing these boundaries should fail loudly with a `Text.error(...)` message
-rather than raising a bare traceback into the menu loop.
+Boundaries 1–4 are fully unattended after authentication; boundary 5 deliberately is
+not — a human keeps the window visible and resolves the occasional "I'm not a robot"
+challenge (see [workflows.md](workflows.md)).

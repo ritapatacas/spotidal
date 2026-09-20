@@ -50,6 +50,13 @@ These are real runtime dependencies that Poetry will not install for you:
   without it.
 - **`ffmpeg` / `ffprobe`** — used for MP3 conversion, audio normalization, and the
   MP3 quality doctor (`spotidal/model/doctor.py`, `flac_to_mp3.py`, `normalize_audio.py`).
+- **Google Chrome via Playwright** — used by the Rate Your Music harvest
+  (`spotidal/model/rym.py`). The `playwright` package *is* declared in
+  `pyproject.toml`, but the browser binary is installed separately with
+  `poetry run playwright install chrome`, and the harvest runs in a real,
+  visible Chrome window with a persistent profile under
+  `~/.config/spotidal/rym-profile/` (challenges solved by hand; see
+  `docs/agents/workflows.md`).
 
 If you add a feature that depends on another external binary, document it here.
 
