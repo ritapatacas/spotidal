@@ -16,8 +16,10 @@ On a TIDAL rate limit (HTTP 429 / "too many requests"), the script sleeps
 """
 import argparse
 import csv
+import shutil
 import sys
 import time
+from datetime import datetime
 from pathlib import Path
 
 import mutagen
@@ -29,6 +31,19 @@ from spotidal.model.helpers.td_downloader import download_url
 
 RATE_LIMIT_SLEEP_SECONDS = 30 * 60
 SEARCH_DELAY_SECONDS = 1.0
+
+
+def _format_elapsed(seconds):
+    minutes, secs = divmod(int(seconds), 60)
+    hours, minutes = divmod(minutes, 60)
+    return f"{hours}:{minutes:02d}:{secs:02d}" if hours else f"{minutes:02d}:{secs:02d}"
+
+
+def _right_align(body, tail, min_pad=1):
+    """Pad `body` with spaces so `tail` lands flush with the terminal's right edge."""
+    columns = shutil.get_terminal_size(fallback=(100, 24)).columns
+    pad = max(min_pad, columns - len(body) - len(tail))
+    return f"{body}{' ' * pad}{tail}"
 
 
 def is_rate_limited(error: Exception) -> bool:
@@ -162,9 +177,25 @@ def main():
 
     matched = downloaded = unmatched = failed = 0
 
+    total = len(pending)
+    count_width = len(str(total)) if total else 1
+    start = time.monotonic()
+
+    def _report_progress(n):
+        elapsed = time.monotonic() - start
+        left = total - n
+        pct = 100 * n / total if total else 100
+        rate = elapsed / n if n else 0
+        body = (
+            f" .. processing  -  {pct:3.0f}%  -  {n:>{count_width}}/{total} "
+            f"- {left:>{count_width}} left  -  {rate:.1f}s/t"
+        )
+        tail = f"[{_format_elapsed(elapsed)}] @ {datetime.now():%H:%M:%S}"
+        print(_right_align(body, tail))
+
     for i, row in enumerate(pending, 1):
         mp3_path = Path(row["mp3_path"])
-        print(f"[{i}/{len(pending)}] {mp3_path.name}")
+        print(f"[{i}/{total}] {mp3_path.name}")
 
         if not mp3_path.exists():
             append_progress(
@@ -174,6 +205,7 @@ def main():
             )
             is_new_progress = False
             failed += 1
+            _report_progress(i)
             continue
 
         tags = read_tags(mp3_path)
@@ -191,6 +223,7 @@ def main():
             )
             is_new_progress = False
             unmatched += 1
+            _report_progress(i)
             continue
 
         matched += 1
@@ -203,6 +236,7 @@ def main():
                 is_new_progress,
             )
             is_new_progress = False
+            _report_progress(i)
             continue
 
         url = f"https://tidal.com/track/{track.id}"
@@ -234,6 +268,7 @@ def main():
                 is_new_progress,
             )
         is_new_progress = False
+        _report_progress(i)
 
     print(
         f"\ndone: {matched} matched ({downloaded} downloaded), "
