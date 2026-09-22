@@ -32,6 +32,13 @@ from spotidal.model.helpers.td_downloader import download_url
 RATE_LIMIT_SLEEP_SECONDS = 30 * 60
 SEARCH_DELAY_SECONDS = 1.0
 
+GREY = "\033[38;5;102m"
+WHITE = "\033[0m"
+
+
+def _grey(text):
+    return GREY + text + WHITE
+
 
 def _format_elapsed(seconds):
     minutes, secs = divmod(int(seconds), 60)
@@ -119,7 +126,7 @@ def find_tidal_match(td_session: tidalapi.Session, sp_track: dict):
             break
         except Exception as error:
             if is_rate_limited(error):
-                print(f"  rate limited during search; sleeping {RATE_LIMIT_SLEEP_SECONDS}s")
+                print(_grey(f"  rate limited during search; sleeping {RATE_LIMIT_SLEEP_SECONDS}s"))
                 time.sleep(RATE_LIMIT_SLEEP_SECONDS)
                 continue
             raise
@@ -191,7 +198,7 @@ def main():
             f"- {left:>{count_width}} left  -  {rate:.1f}s/t"
         )
         tail = f"[{_format_elapsed(elapsed)}] @ {datetime.now():%H:%M:%S}"
-        print(_right_align(body, tail))
+        print(_grey(_right_align(body, tail)))
 
     for i, row in enumerate(pending, 1):
         mp3_path = Path(row["mp3_path"])
@@ -215,7 +222,7 @@ def main():
         track = find_tidal_match(td_session, sp_track)
 
         if not track:
-            print(f"  no confident TIDAL match for '{tags['artist']} - {tags['title']}'")
+            print(_grey(f"  no confident TIDAL match for '{tags['artist']} - {tags['title']}'"))
             append_progress(
                 progress_path,
                 {"mp3_path": str(mp3_path), "result": "unmatched", "tidal_id": "", "detail": f"{tags['artist']} - {tags['title']}"},
@@ -227,7 +234,7 @@ def main():
             continue
 
         matched += 1
-        print(f"  matched TIDAL track {track.id}: {track.artist.name} - {track.name}")
+        print(_grey(f"  matched TIDAL track {track.id}: {track.artist.name} - {track.name}"))
 
         if args.dry_run:
             append_progress(
@@ -246,10 +253,10 @@ def main():
                 break
             except Exception as error:
                 if is_rate_limited(error):
-                    print(f"  rate limited during download; sleeping {RATE_LIMIT_SLEEP_SECONDS}s")
+                    print(_grey(f"  rate limited during download; sleeping {RATE_LIMIT_SLEEP_SECONDS}s"))
                     time.sleep(RATE_LIMIT_SLEEP_SECONDS)
                     continue
-                print(f"  download failed: {error}")
+                print(_grey(f"  download failed: {error}"))
                 result = None
                 break
 
