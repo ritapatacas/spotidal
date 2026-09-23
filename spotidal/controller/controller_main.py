@@ -409,15 +409,16 @@ class ControllerMain:
                     mismatches.append(f"album mismatch (db={local['album']!r} vs spotify={album!r})")
 
                 try:
+                    # Only an exact ISRC match on the TIDAL candidate is
+                    # trusted enough to propose a tidal_id correction — a
+                    # title/artist/duration fallback still misfires often
+                    # in practice (same-titled cover, remix, or same-length
+                    # unrelated song by a different artist), so a track
+                    # whose TIDAL copy doesn't carry a matching ISRC is left
+                    # unflagged here rather than risk a wrong "fix".
                     results = td_session.search(f"{title} {artist}", models=[tidalapi.media.Track])
                     candidates = results.get("tracks", [])
                     found = next((c for c in candidates if getattr(c, "isrc", None) == isrc), None)
-                    if not found:
-                        normalized_title = _normalize_for_match(title)
-                        found = next(
-                            (c for c in candidates if normalized_title == _normalize_for_match(c.name)),
-                            None,
-                        )
                     if found and local["tidal_id"] and str(found.id) != str(local["tidal_id"]):
                         mismatches.append(f"tidal_id mismatch (db={local['tidal_id']} vs found={found.id})")
                 except Exception:
