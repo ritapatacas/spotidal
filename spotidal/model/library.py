@@ -639,6 +639,29 @@ class MusicLibrary:
                 (str(tidal_id), _now(), track_id),
             )
 
+    def find_track_by_isrc(self, isrc):
+        if not isrc:
+            return None
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT track_id, title, artist, album, spotify_id, tidal_id "
+                "FROM tracks WHERE isrc = ?",
+                (isrc,),
+            ).fetchone()
+        if not row:
+            return None
+        return {
+            "track_id": row[0], "title": row[1], "artist": row[2],
+            "album": row[3], "spotify_id": row[4], "tidal_id": row[5],
+        }
+
+    def set_review(self, track_id, reason):
+        with self._connect() as connection:
+            connection.execute(
+                "UPDATE tracks SET review_reason=?, reviewed_at=? WHERE track_id=?",
+                (reason, _now(), track_id),
+            )
+
     def genre_scan_rows(self, track_ids=None):
         with self._connect() as connection:
             query = (

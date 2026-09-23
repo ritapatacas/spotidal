@@ -209,6 +209,7 @@ class UtilsMenu(MenuBase):
     FILL_GENRES_RYM = "fill genres from rate your music (browser)"
     EXPORT_REKORDBOX = "export playlists for rekordbox (xml+m3u8)"
     IMPORT_REKORDBOX_BPM_KEY = "import bpm/key from rekordbox (update db)"
+    AUDIT_CONSISTENCY = "audit playlist consistency (spotify vs db)"
     BACK = "back"
 
     PLAYLISTS = "playlists"
@@ -228,7 +229,7 @@ class UtilsMenu(MenuBase):
     ]
     LOCAL_FILES_OPT = [
         DOCTOR_MP3_QUALITY, CONVERT_TO_FLAC, RUN_WATCHER,
-        WATCH_PLAYLIST_FILES, EXPORT_REKORDBOX,
+        WATCH_PLAYLIST_FILES, EXPORT_REKORDBOX, AUDIT_CONSISTENCY,
     ]
     DATABASE_OPT = [
         DOCTOR_PLAYLISTS, RUN_WATCHER, WATCH_PLAYLIST_FILES,

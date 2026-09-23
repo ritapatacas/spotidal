@@ -22,7 +22,7 @@ from ..model.library import MusicLibrary
 from ..model.rekordbox import RekordboxExport, RekordboxImport
 from ..webui.server import run_server as run_search_server
 from ..model.library_watcher import LibraryWatcher
-from ..model.helpers.sync.playlists_handler import get_td_playlists_wrapper
+from ..model.helpers.sync.playlists_handler import get_td_playlists_wrapper, get_tracks_from_sp_playlist
 from ..model.helpers.tidalapi import get_all_playlist_tracks
 from ..model.helpers.type.file import Files
 from ..model.helpers.td_downloader import (
@@ -342,6 +342,67 @@ class ControllerMain:
             print(t.warning(f"sample error: {sample}"))
         for sample in debug_samples:
             print(t.log_grey(sample))
+
+    def audit_playlist_consistency(self, names):
+        if not self._library:
+            print(t.error("local database is unavailable"))
+            return
+        sp_session = self.model.sessions["sp"]
+        td_session = self.model.sessions["td"]
+        checked = flagged = not_found = 0
+        for name in names:
+            info = self._playlist_info(name)
+            if not info or not info.get("sp_id"):
+                print(t.warning(f"skipping '{name}': no matching spotify playlist id"))
+                continue
+            tracks = asyncio.run(
+                get_tracks_from_sp_playlist(sp_session, {"id": info["sp_id"], "name": name})
+            )
+            for track in tqdm(tracks, desc=t.busy(f"auditing '{name}'"), unit="track"):
+                title = track.get("name")
+                artists = [a["name"] for a in track.get("artists", [])]
+                artist = ", ".join(artists)
+                album = (track.get("album") or {}).get("name")
+                isrc = (track.get("external_ids") or {}).get("isrc")
+
+                local = self._library.find_track_by_isrc(isrc)
+                if not local:
+                    not_found += 1
+                    continue
+                checked += 1
+
+                mismatches = []
+                if _normalize_for_match(local["title"]) != _normalize_for_match(title):
+                    mismatches.append(f"title mismatch (db={local['title']!r} vs spotify={title!r})")
+                local_artists = {_normalize_for_match(a) for a in _split_artists(local["artist"] or "")}
+                sp_artists = {_normalize_for_match(a) for a in artists}
+                if local_artists and sp_artists and not (local_artists & sp_artists):
+                    mismatches.append(f"artist mismatch (db={local['artist']!r} vs spotify={artist!r})")
+                if local["album"] and album and _normalize_for_match(local["album"]) != _normalize_for_match(album):
+                    mismatches.append(f"album mismatch (db={local['album']!r} vs spotify={album!r})")
+
+                try:
+                    results = td_session.search(f"{title} {artist}", models=[tidalapi.media.Track])
+                    candidates = results.get("tracks", [])
+                    found = next((c for c in candidates if getattr(c, "isrc", None) == isrc), None)
+                    if not found:
+                        normalized_title = _normalize_for_match(title)
+                        found = next(
+                            (c for c in candidates if normalized_title == _normalize_for_match(c.name)),
+                            None,
+                        )
+                    if found and local["tidal_id"] and str(found.id) != str(local["tidal_id"]):
+                        mismatches.append(f"tidal_id mismatch (db={local['tidal_id']} vs found={found.id})")
+                except Exception:
+                    pass
+
+                self._library.set_review(local["track_id"], "; ".join(mismatches) if mismatches else None)
+                if mismatches:
+                    flagged += 1
+        print(t.log(
+            f"audit complete: {checked} checked, {flagged} flagged for review, "
+            f"{not_found} not found locally (isrc lookup failed)"
+        ))
 
     def resolve_playlist_name_from_url(self, url):
         parsed = urlparse(url.strip())

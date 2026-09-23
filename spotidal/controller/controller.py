@@ -320,7 +320,13 @@ class Controller:
             UtilsMenu.RUN_WATCHER: lambda: self._run_task(self.app.reconcile_library),
             UtilsMenu.WATCH_PLAYLIST_FILES: self._watch_playlist_files,
             UtilsMenu.EXPORT_REKORDBOX: lambda: self._run_task(self.app.export_rekordbox),
+            UtilsMenu.AUDIT_CONSISTENCY: self._audit_consistency,
         })
+
+    def _audit_consistency(self):
+        names = view.select_menu(self.app.playlist_names())
+        if names:
+            self._run_task(self.app.audit_playlist_consistency, names)
 
     def _utils_database(self):
         self._run_submenu(UtilsMenu.DATABASE, UtilsMenu.DATABASE_OPT, {
