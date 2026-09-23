@@ -22,8 +22,10 @@ Usage:
 """
 import argparse
 import csv
+import shutil
 import sqlite3
 import time
+from datetime import datetime
 from pathlib import Path
 
 import tidalapi
@@ -38,6 +40,18 @@ SEARCH_DELAY_SECONDS = 1.0
 
 GREY = "\033[38;5;102m"
 WHITE = "\033[0m"
+
+
+def _format_elapsed(seconds):
+    minutes, secs = divmod(int(seconds), 60)
+    hours, minutes = divmod(minutes, 60)
+    return f"{hours}:{minutes:02d}:{secs:02d}" if hours else f"{minutes:02d}:{secs:02d}"
+
+
+def _right_align(body, tail, min_pad=1):
+    columns = shutil.get_terminal_size(fallback=(100, 24)).columns
+    pad = max(min_pad, columns - len(body) - len(tail))
+    return f"{body}{' ' * pad}{tail}"
 
 
 def _grey(text):
@@ -206,8 +220,9 @@ def main():
 
             elapsed = time.monotonic() - start
             rate = elapsed / i
-            body = f" .. checking  -  {100*i/total:3.0f}%  -  {i}/{total} - {total-i} left  -  {rate:.1f}s/t"
-            print(_grey(f"{body}  [{action}]"))
+            body = f" .. checking  -  {100*i/total:3.0f}%  -  {i}/{total} - {total-i} left  -  {rate:.1f}s/t  [{action}]"
+            tail = f"[{_format_elapsed(elapsed)}] @ {datetime.now():%H:%M:%S}"
+            print(_grey(_right_align(body, tail)))
 
     print(f"\ndone: {fixed} fixed, {cleared} cleared (no confident match), "
           f"{unchanged} unchanged, {missing_file} missing files. Details in {args.out}")
