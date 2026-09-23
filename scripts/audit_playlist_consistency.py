@@ -232,7 +232,7 @@ async def main_async():
             if args.write_db:
                 review_reason = "; ".join(mismatches) if mismatches else None
                 conn.execute(
-                    "UPDATE tracks SET review_reason=?, updated_at=datetime('now') WHERE track_id=?",
+                    "UPDATE tracks SET review_reason=?, reviewed_at=datetime('now') WHERE track_id=?",
                     (review_reason, local["track_id"]),
                 )
                 conn.commit()
