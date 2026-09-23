@@ -139,11 +139,14 @@ def find_tidal_match(td_session: tidalapi.Session, sp_track: dict):
     return None
 
 
+DONE_RESULTS = {"downloaded", "unmatched", "missing_source", "download_failed"}
+
+
 def load_progress(progress_path: Path) -> set:
     if not progress_path.exists():
         return set()
     with open(progress_path, newline="", encoding="utf-8") as f:
-        return {row["mp3_path"] for row in csv.DictReader(f)}
+        return {row["mp3_path"] for row in csv.DictReader(f) if row["result"] in DONE_RESULTS}
 
 
 def append_progress(progress_path: Path, row: dict, is_new_file: bool):
