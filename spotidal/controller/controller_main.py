@@ -351,12 +351,12 @@ class ControllerMain:
         td_session = self.model.sessions["td"]
         checked = flagged = not_found = 0
         for name in names:
-            info = self._playlist_info(name)
-            if not info or not info.get("sp_id"):
+            sp_id = self._library.get_playlist_spotify_id(name)
+            if not sp_id:
                 print(t.warning(f"skipping '{name}': no matching spotify playlist id"))
                 continue
             tracks = asyncio.run(
-                get_tracks_from_sp_playlist(sp_session, {"id": info["sp_id"], "name": name})
+                get_tracks_from_sp_playlist(sp_session, {"id": sp_id, "name": name})
             )
             for track in tqdm(tracks, desc=t.busy(f"auditing '{name}'"), unit="track"):
                 title = track.get("name")

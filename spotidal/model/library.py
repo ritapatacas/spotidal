@@ -738,6 +738,13 @@ class MusicLibrary:
                 )
             ]
 
+    def get_playlist_spotify_id(self, name):
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT spotify_playlist_id FROM playlists WHERE name = ?", (name,)
+            ).fetchone()
+            return row[0] if row else None
+
     def track_ids_for_playlists(self, names):
         names = list(names or [])
         if not names:
