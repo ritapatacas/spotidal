@@ -168,7 +168,14 @@ def main():
     args = parser.parse_args()
 
     report_path = Path(args.report)
-    progress_path = report_path.parent / "download_missing_flac_progress.csv"
+    # kept as the original fixed name for the original albums report, so an
+    # existing progress file from before per-report naming still resumes;
+    # any other report gets its own file so concurrent runs (e.g. albums +
+    # compilations + EPs-et-al at once) never share (and race on) one file.
+    if report_path.name == "flac_match_report.csv":
+        progress_path = report_path.parent / "download_missing_flac_progress.csv"
+    else:
+        progress_path = report_path.parent / f"{report_path.stem}_progress.csv"
     is_new_progress = not progress_path.exists()
 
     with open(report_path, newline="", encoding="utf-8") as f:
