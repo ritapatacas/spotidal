@@ -101,11 +101,38 @@ def main():
         default="/Users/ritapatacas/sound-library/tidal_id_fixes.csv",
     )
     parser.add_argument("--dry-run", action="store_true", help="search only, do not write to the db")
+    parser.add_argument(
+        "--apply-from",
+        help="skip searching entirely; just apply the fixed/cleared rows from a "
+             "previously generated --out csv (e.g. from a --dry-run) to the db",
+    )
     args = parser.parse_args()
 
     settings = Files.SETTINGS.load() or {}
     db_path = settings.get("databaseLocation")
     root = Path(settings.get("flacDirectory", "")).expanduser().parent
+
+    if args.apply_from:
+        conn = sqlite3.connect(db_path)
+        with open(args.apply_from, newline="", encoding="utf-8") as f:
+            fix_rows = list(csv.DictReader(f))
+        applied = 0
+        for r in fix_rows:
+            if r["action"] == "fixed":
+                conn.execute(
+                    "UPDATE tracks SET tidal_id=?, updated_at=datetime('now') WHERE track_id=?",
+                    (r["new_tidal_id"], r["track_id"]),
+                )
+                applied += 1
+            elif r["action"] == "cleared":
+                conn.execute(
+                    "UPDATE tracks SET tidal_id=NULL, updated_at=datetime('now') WHERE track_id=?",
+                    (r["track_id"],),
+                )
+                applied += 1
+        conn.commit()
+        print(f"applied {applied} updates from {args.apply_from} to {db_path}")
+        return
 
     with open(args.collisions, newline="", encoding="utf-8") as f:
         rows = [r for r in csv.DictReader(f) if r["classification"] == "suspicious"]
