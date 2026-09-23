@@ -2,6 +2,7 @@ import asyncio
 import os
 import re
 import threading
+import unicodedata
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -47,6 +48,11 @@ def _strip_version_suffix(text):
     text = re.sub(r"\s*[-–].*$", "", text or "")
     text = re.sub(r"\s*[\(\[].*$", "", text)
     return text.strip()
+
+
+def _strip_diacritics(text):
+    normalized = unicodedata.normalize("NFD", text or "")
+    return "".join(c for c in normalized if not unicodedata.combining(c))
 
 
 def _format_track(candidate):
@@ -381,14 +387,25 @@ class ControllerMain:
                     continue
                 checked += 1
 
+                def _clean(text):
+                    return _normalize_for_match(_strip_diacritics(_strip_version_suffix(text)))
+
                 mismatches = []
-                if _normalize_for_match(_strip_version_suffix(local["title"])) != _normalize_for_match(_strip_version_suffix(title)):
+                if _clean(local["title"]) != _clean(title):
                     mismatches.append(f"title mismatch (db={local['title']!r} vs spotify={title!r})")
-                local_artists = {_normalize_for_match(a) for a in _split_artists(local["artist"] or "")}
-                sp_artists = {_normalize_for_match(a) for a in artists}
+                local_artists = {
+                    _normalize_for_match(_strip_diacritics(a))
+                    for name in [local["artist"] or ""]
+                    for a in _split_artists(name)
+                }
+                sp_artists = {
+                    _normalize_for_match(_strip_diacritics(a))
+                    for name in artists
+                    for a in _split_artists(name)
+                }
                 if local_artists and sp_artists and not (local_artists & sp_artists):
                     mismatches.append(f"artist mismatch (db={local['artist']!r} vs spotify={artist!r})")
-                if local["album"] and album and _normalize_for_match(_strip_version_suffix(local["album"])) != _normalize_for_match(_strip_version_suffix(album)):
+                if local["album"] and album and _clean(local["album"]) != _clean(album):
                     mismatches.append(f"album mismatch (db={local['album']!r} vs spotify={album!r})")
 
                 try:
