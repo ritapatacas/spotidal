@@ -324,7 +324,8 @@ class Controller:
         })
 
     def _audit_consistency(self):
-        names = view.select_menu(self.app.playlist_names())
+        preselected = self.model.current_selection or set(self.playlists.load())
+        names = view.select_menu(self.app.playlist_names(), preselected)
         if names:
             self._run_task(self.app.audit_playlist_consistency, names)
 
