@@ -577,7 +577,7 @@ class URLMenu(MenuBase):
 
 
 class SelectMenu(MenuBase):
-    SELECT_Q = "select playlists (all = a, none = n, back = b, save = s)"
+    SELECT_Q = "select playlists (all = a, none = n, invert = i, back = b, save = s)"
     SELECT_ERR = "select at least one playlist"
 
     def __init__(self):
@@ -593,6 +593,7 @@ class SelectMenu(MenuBase):
         keybindings_select_list = {
             "toggle-all-true": [{"key": "a"}],
             "toggle-all-false": [{"key": "n"}],
+            "toggle-all": [{"key": "i"}],
             "answer": [{"key": "enter"}, {"key": "s"}],
             "skip": [{"key": "escape"}, {"key": "b"}],
         }
