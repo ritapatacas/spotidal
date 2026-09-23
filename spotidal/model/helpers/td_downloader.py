@@ -382,9 +382,18 @@ def _report_downloads(output, download_path, previous_files):
             if len(new_files) == 1:
                 reported_files.update(new_files)
                 continue
+            # Match only among files that appeared during *this* download,
+            # not the whole library — a generic/short title (e.g. "Love")
+            # can substring-match dozens of unrelated pre-existing tracks,
+            # and every match here gets import_file()'d with this track's
+            # tidal_id, corrupting all of them. Only fall back to the full
+            # library if literally nothing new showed up this run (e.g. a
+            # timing race on the before/after snapshot) — better than
+            # silently skipping the import entirely.
+            search_pool = new_files or current_files
             matches = [
                 file_path
-                for file_path in current_files
+                for file_path in search_pool
                 if _title_matches_file(title, file_path)
             ]
             reported_files.update(matches)
