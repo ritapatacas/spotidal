@@ -120,6 +120,12 @@ def main():
         help="skip searching entirely; just apply the fixed/cleared rows from a "
              "previously generated --out csv (e.g. from a --dry-run) to the db",
     )
+    parser.add_argument(
+        "--max-duration-diff", type=float, default=15.0,
+        help="skip applying a 'fixed' row whose duration_diff_s exceeds this "
+             "(matched via ISRC but the durations still disagree oddly, so it "
+             "gets left alone for manual review instead of auto-applied)",
+    )
     args = parser.parse_args()
 
     settings = Files.SETTINGS.load() or {}
@@ -130,9 +136,17 @@ def main():
         conn = sqlite3.connect(db_path)
         with open(args.apply_from, newline="", encoding="utf-8") as f:
             fix_rows = list(csv.DictReader(f))
-        applied = 0
+        applied = skipped_low_confidence = 0
         for r in fix_rows:
             if r["action"] == "fixed":
+                diff = float(r["duration_diff_s"]) if r["duration_diff_s"] else 0.0
+                if diff > args.max_duration_diff:
+                    skipped_low_confidence += 1
+                    print(_grey(
+                        f"  skipping (duration diff {diff:.1f}s > {args.max_duration_diff}s): "
+                        f"{r['artist']} - {r['title']}"
+                    ))
+                    continue
                 conn.execute(
                     "UPDATE tracks SET tidal_id=?, updated_at=datetime('now') WHERE track_id=?",
                     (r["new_tidal_id"], r["track_id"]),
@@ -145,7 +159,8 @@ def main():
                 )
                 applied += 1
         conn.commit()
-        print(f"applied {applied} updates from {args.apply_from} to {db_path}")
+        print(f"applied {applied} updates from {args.apply_from} to {db_path} "
+              f"({skipped_low_confidence} skipped for manual review, duration diff too large)")
         return
 
     with open(args.collisions, newline="", encoding="utf-8") as f:
