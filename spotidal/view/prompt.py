@@ -128,7 +128,7 @@ class MainMenu(MenuBase):
     SYNC = "sync", Prompt.LIST
     DOWNLOAD = "download", Prompt.LIST
     CONVERT = "convert", Prompt.LIST
-    SEARCH = "search", Prompt.LIST
+    SEARCH = "explore library", Prompt.LIST
     QUIT = "quit", Prompt.LIST
     UTILS = "utils", Prompt.LIST
     SETTINGS = "settings", Prompt.LIST
@@ -199,6 +199,7 @@ class UtilsMenu(MenuBase):
     DOCTOR_DOWNLOAD = "download doctor (full pipeline check)"
     DOCTOR_PLAYLISTS = "playlists doctor (selection vs db)"
     DOCTOR_MISSING_TRACKS = "missing tracks doctor (download missing)"
+    DOWNLOAD_CURRENT_MISSING = "download current missing tracks"
     DOCTOR_MP3_QUALITY = "mp3 quality doctor (bitrate vs flac)"
     RUN_WATCHER = "run local files watcher (update db)"
     WATCH_PLAYLIST_FILES = "watch playlist files (update db)"
@@ -222,8 +223,8 @@ class UtilsMenu(MenuBase):
         WATCH_PLAYLIST_FILES, EXPORT_REKORDBOX,
     ]
     DOWNLOAD_OPT = [
-        DOCTOR_DOWNLOAD, DOCTOR_MISSING_TRACKS, TIDEKEEPER_DOCTOR,
-        CLEAN_TMP, REFRESH_SESSION,
+        DOCTOR_DOWNLOAD, DOCTOR_MISSING_TRACKS, DOWNLOAD_CURRENT_MISSING,
+        TIDEKEEPER_DOCTOR, CLEAN_TMP, REFRESH_SESSION,
     ]
     LOCAL_FILES_OPT = [
         DOCTOR_MP3_QUALITY, CONVERT_TO_FLAC, RUN_WATCHER,
@@ -285,6 +286,25 @@ class DownloadSettingsMenu(MenuBase):
     def display(self):
         questions = [{
             "type": "list", "name": "action", "message": "download settings",
+            "choices": self.OPTIONS, "mandatory": False,
+            "keybindings": BACK_KEYBINDINGS,
+        }]
+        return _ask(questions).get("action")
+
+
+class MissingTracksModeMenu(MenuBase):
+    DOWNLOAD = "download current missing tracks"
+    FIND = "find missing tracks"
+    FIND_AND_DOWNLOAD = "find and download missing tracks"
+    BACK = "back"
+    OPTIONS = [FIND_AND_DOWNLOAD, FIND, DOWNLOAD, BACK]
+
+    def __init__(self):
+        super().__init__(Prompt.LIST)
+
+    def display(self):
+        questions = [{
+            "type": "list", "name": "action", "message": "missing tracks doctor",
             "choices": self.OPTIONS, "mandatory": False,
             "keybindings": BACK_KEYBINDINGS,
         }]
@@ -505,6 +525,7 @@ class SelectionModeMenu(MenuBase):
     BACK = "back", Prompt.LIST
     URL = "url"
     LOAD = "load selection"
+    DOWNLOAD_MISSING = "download current missing tracks"
     SELECTION_OPT = [SEARCH, SELECT, BACK]
 
     def __init__(self):
@@ -513,10 +534,14 @@ class SelectionModeMenu(MenuBase):
             opt[0] for opt in self.SELECTION_OPT
         ]
 
-    def display(self, include_url=False):
-        options = ([self.URL] if include_url else []) + [self.SEARCH[0], self.SELECT[0]]
+    def display(self, include_url=False, include_missing_tracks=False):
+        options = (
+            ([self.DOWNLOAD_MISSING] if include_missing_tracks else [])
+            + ([self.LOAD] if include_url else [])
+            + [self.SELECT[0], self.SEARCH[0]]
+        )
         if include_url:
-            options.append(self.LOAD)
+            options.append(self.URL)
         options.append(self.BACK[0])
         questions = [
             {
@@ -551,7 +576,7 @@ class URLMenu(MenuBase):
 
 
 class SelectMenu(MenuBase):
-    SELECT_Q = "select playlists (all = a, none = n)"
+    SELECT_Q = "select playlists (all = a, none = n, back = b, save = s)"
     SELECT_ERR = "select at least one playlist"
 
     def __init__(self):
@@ -567,6 +592,8 @@ class SelectMenu(MenuBase):
         keybindings_select_list = {
             "toggle-all-true": [{"key": "a"}],
             "toggle-all-false": [{"key": "n"}],
+            "answer": [{"key": "enter"}, {"key": "s"}],
+            "skip": [{"key": "escape"}, {"key": "b"}],
         }
         questions = [
             {
@@ -575,7 +602,9 @@ class SelectMenu(MenuBase):
                 "name": "selected_playlists",
                 "choices": choices,
                 "mandatory": False,
-                "keybindings": BACK_KEYBINDINGS,
+                "transformer": lambda result: (
+                    f"{len(result)} selected: {', '.join(result)}" if result else "none"
+                ),
             }
         ]
         response = _ask(questions, keybindings=keybindings_select_list)

@@ -27,6 +27,7 @@ from spotidal.view.prompt import (
     Submenu,
     ListMenu,
     InputMenu,
+    MissingTracksModeMenu,
 )
 
 #app = Controller()
@@ -76,6 +77,9 @@ def audio_quality_menu(target=None, fallback=None):
 def download_settings_menu():
     return DownloadSettingsMenu().display()
 
+def missing_tracks_mode_menu():
+    return MissingTracksModeMenu().display()
+
 def database_settings_menu():
     return DatabaseSettingsMenu().display()
 
@@ -107,9 +111,10 @@ def confirm_selection_menu():
     )
     return response
 
-def selection_mode_menu(include_url=False):
+def selection_mode_menu(include_url=False, include_missing_tracks=False):
+    print()
     selection_mode_menu = SelectionModeMenu()
-    action = selection_mode_menu.display(include_url)
+    action = selection_mode_menu.display(include_url, include_missing_tracks)
     return action
 
 def search_menu(get_remaining_playlists):
@@ -126,10 +131,7 @@ def save_menu():
 
 def select_menu(get_remaining_playlists, selected=None):
     select_menu = SelectMenu()
-    result = select_menu.display(get_remaining_playlists, selected)
-    print('view select menu result')
-    print(result)
-    return result
+    return select_menu.display(get_remaining_playlists, selected)
 
 def url_menu():
     return URLMenu().display()

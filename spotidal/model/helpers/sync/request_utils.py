@@ -1,8 +1,8 @@
+import asyncio
 import requests
 import sys
 import spotipy
 import tidalapi
-import time
 import traceback
 from ....view.text import Text as t
 
@@ -34,7 +34,7 @@ async def repeat_on_request_error(function, *args, remaining=5, **kwargs):
             sys.exit(1)
         # sleep variable length of time depending on retry number
         sleep_schedule = {5: 1, 4: 10, 3: 60, 2: 5 * 60, 1: 10 * 60}
-        time.sleep(sleep_schedule.get(remaining, 1))
+        await asyncio.sleep(sleep_schedule.get(remaining, 1))
         return await repeat_on_request_error(
             function, *args, remaining=remaining - 1, **kwargs
         )

@@ -1,7 +1,9 @@
+import atexit
 import os
 import json
 import re
 import select
+from datetime import datetime
 import subprocess
 import sys
 import termios
@@ -42,13 +44,89 @@ TIDEKEEPER_SETUP_LOCK = threading.Lock()
 DATABASE_IMPORT_LOCK = threading.Lock()
 ACCESS_TOKEN_LOG_LOCK = threading.Lock()
 ACCESS_TOKEN_LOGGED = False
+_ACTIVE_DOWNLOADS_LOCK = threading.Lock()
+_ACTIVE_DOWNLOADS = 0
+STDIN_MONITOR_LOCK = threading.Lock()
+CANCEL_ALL_DOWNLOADS = threading.Event()
+_ACTIVE_PROCESSES_LOCK = threading.Lock()
+_ACTIVE_PROCESSES = set()
+# Adaptive extra delay applied before starting each new download, on top of
+# tidekeeper's own internal 429 backoff. Grows when TIDAL rate-limits us,
+# decays back down once requests start going through cleanly again.
+_RATE_LIMIT_LOCK = threading.Lock()
+_RATE_LIMIT_DELAY = 0.0
+RATE_LIMIT_DELAY_STEP = 2.0
+RATE_LIMIT_DELAY_MAX = 25.0
+
+
+def _note_rate_limited():
+    global _RATE_LIMIT_DELAY
+    with _RATE_LIMIT_LOCK:
+        before = _RATE_LIMIT_DELAY
+        _RATE_LIMIT_DELAY = min(RATE_LIMIT_DELAY_MAX, _RATE_LIMIT_DELAY + RATE_LIMIT_DELAY_STEP)
+        after = _RATE_LIMIT_DELAY
+    if after != before:
+        tqdm.write(t.log_grey(f"delay between requests: {before:.1f}s -> {after:.1f}s"))
+
+
+def _decay_rate_limit_delay():
+    global _RATE_LIMIT_DELAY
+    with _RATE_LIMIT_LOCK:
+        before = _RATE_LIMIT_DELAY
+        _RATE_LIMIT_DELAY = max(0.0, _RATE_LIMIT_DELAY - RATE_LIMIT_DELAY_STEP / 2)
+        after = _RATE_LIMIT_DELAY
+    if after != before:
+        tqdm.write(t.log_grey(f"delay between requests: {before:.1f}s -> {after:.1f}s"))
+
+
+def _current_rate_limit_delay():
+    with _RATE_LIMIT_LOCK:
+        return _RATE_LIMIT_DELAY
+
+
+# Tracks download *attempts* (one per download_url() call), not raw HTTP
+# requests: tidekeeper makes several actual API calls per track internally
+# and we have no visibility into that count from the outside.
+_REQUEST_LOG_LOCK = threading.Lock()
+_REQUEST_TIMESTAMPS = []
+
+
+def _note_request():
+    with _REQUEST_LOG_LOCK:
+        _REQUEST_TIMESTAMPS.append(time.monotonic())
+
+
+def _request_counts():
+    now = time.monotonic()
+    with _REQUEST_LOG_LOCK:
+        total = len(_REQUEST_TIMESTAMPS)
+        last_hour = sum(1 for t in _REQUEST_TIMESTAMPS if now - t <= 3600)
+        last_minute = sum(1 for t in _REQUEST_TIMESTAMPS if now - t <= 60)
+    return total, last_hour, last_minute
+
+
+_TIDEKEEPER_VERIFIED = False
+_TIDEKEEPER_PROGRESS_CONFIGURED = False
+_TIDEKEEPER_CONFIGURED_SETTINGS = None
 
 
 class TidalSessionStaleError(RuntimeError):
     """Raised when TIDAL rejects the saved session's API client."""
 
 
+class DownloadCancelled(RuntimeError):
+    """Raised when the user confirms stopping the current download batch."""
+
+
 def check_and_install_tidekeeper():
+    # Spawns a subprocess just to check the version; with several download
+    # threads each calling this once per track under TIDEKEEPER_SETUP_LOCK,
+    # that serialized subprocess-per-track adds real per-track latency for
+    # no benefit once we already know it's installed. Verify once per
+    # process instead.
+    global _TIDEKEEPER_VERIFIED
+    if _TIDEKEEPER_VERIFIED:
+        return
     try:
         result = subprocess.run(
             ["tidekeeper", "--version"], capture_output=True, text=True
@@ -60,13 +138,20 @@ def check_and_install_tidekeeper():
         subprocess.check_call(
             [sys.executable, "-m", "pip", "install", "--upgrade", "tidekeeper"]
         )
+    _TIDEKEEPER_VERIFIED = True
 
 
 def configure_tidekeeper_formats(settings):
+    # Same reasoning as check_and_install_tidekeeper: this does file I/O
+    # under the shared setup lock on every single track. Skip the rewrite
+    # when the relevant settings haven't changed since the last call.
+    global _TIDEKEEPER_CONFIGURED_SETTINGS
+    tidekeeper = settings.get("tidekeeper", {})
+    if _TIDEKEEPER_CONFIGURED_SETTINGS == tidekeeper:
+        return
     config_path = Path(os.path.expanduser("~/.tidal-dl.json"))
     try:
         config = json.loads(config_path.read_text()) if config_path.exists() else {}
-        tidekeeper = settings.get("tidekeeper", {})
         config["albumFolderFormat"] = tidekeeper.get(
             "albumFolderFormat", "{ArtistName}/{AlbumTitle}"
         )
@@ -75,11 +160,15 @@ def configure_tidekeeper_formats(settings):
         )
         config["usePlaylistFolder"] = False
         config_path.write_text(json.dumps(config, indent=4))
+        _TIDEKEEPER_CONFIGURED_SETTINGS = tidekeeper
     except (OSError, json.JSONDecodeError, TypeError):
         pass
 
 
 def configure_tidekeeper_progress():
+    global _TIDEKEEPER_PROGRESS_CONFIGURED
+    if _TIDEKEEPER_PROGRESS_CONFIGURED:
+        return
     try:
         from tidal_dl.paths import PATHS
         from tidal_dl.settings import SETTINGS
@@ -88,6 +177,7 @@ def configure_tidekeeper_progress():
         SETTINGS.showProgress = True
         SETTINGS.multiThread = False
         SETTINGS.save()
+        _TIDEKEEPER_PROGRESS_CONFIGURED = True
     except Exception:
         pass
 
@@ -133,6 +223,36 @@ def _remove_partial_files(download_path):
 
 def clean_tmp(download_path):
     return _remove_partial_files(download_path)
+
+
+def _enter_download():
+    global _ACTIVE_DOWNLOADS
+    with _ACTIVE_DOWNLOADS_LOCK:
+        _ACTIVE_DOWNLOADS += 1
+
+
+def _exit_download():
+    global _ACTIVE_DOWNLOADS
+    with _ACTIVE_DOWNLOADS_LOCK:
+        _ACTIVE_DOWNLOADS -= 1
+        if _ACTIVE_DOWNLOADS <= 0:
+            # Batch fully drained; clear any cancel request so it doesn't
+            # carry over and immediately kill the next, unrelated batch.
+            CANCEL_ALL_DOWNLOADS.clear()
+
+
+def _safe_remove_partial_files(download_path):
+    # _remove_partial_files sweeps every *.part.parts directory under the
+    # shared download tree, not just this call's own track. That's only
+    # safe when this is the sole in-flight download; with several tracks
+    # downloading concurrently (e.g. the missing-tracks doctor's worker
+    # threads) it would delete chunk files a sibling thread is still
+    # writing. Skip the sweep while other downloads are active; a later
+    # solo call (or the explicit 'clean tmp files' menu option) will
+    # still catch any leftovers.
+    with _ACTIVE_DOWNLOADS_LOCK:
+        solo = _ACTIVE_DOWNLOADS <= 1
+    return _remove_partial_files(download_path) if solo else 0
 
 
 def _flac_files(download_path):
@@ -299,6 +419,24 @@ def _wait_for_conversion(process, output_file, output_root):
         )
 
 
+def kill_all_active_downloads():
+    # Called on interpreter shutdown/KeyboardInterrupt: a hung tidekeeper
+    # subprocess (stalled network) leaves its worker thread blocked in
+    # process.wait() forever, which in turn hangs the ThreadPoolExecutor's
+    # own shutdown join. Force-kill every tracked subprocess so those
+    # threads unblock and the app can actually exit.
+    with _ACTIVE_PROCESSES_LOCK:
+        processes = list(_ACTIVE_PROCESSES)
+    for process in processes:
+        try:
+            process.kill()
+        except Exception:
+            pass
+
+
+atexit.register(kill_all_active_downloads)
+
+
 def _run_tidekeeper(command, environment, timeout, progress_callback=None):
     output_queue = Queue()
     process = subprocess.Popen(
@@ -309,6 +447,8 @@ def _run_tidekeeper(command, environment, timeout, progress_callback=None):
         text=True,
         bufsize=1,
     )
+    with _ACTIVE_PROCESSES_LOCK:
+        _ACTIVE_PROCESSES.add(process)
 
     def read_output():
         buffer = []
@@ -334,21 +474,47 @@ def _run_tidekeeper(command, environment, timeout, progress_callback=None):
     token_expired = False
     session_stale = False
     terminal_state = None
-    if sys.stdin.isatty():
+    # Several downloads can run concurrently (the missing-tracks doctor's
+    # worker threads), but there is only one stdin/terminal. Only the thread
+    # that grabs this lock watches for the escape key; the rest just poll
+    # CANCEL_ALL_DOWNLOADS below. Without this, every thread independently
+    # put the terminal into cbreak mode and raced to read the same escape
+    # byte, corrupting terminal state and making the prompt unreliable.
+    owns_stdin = sys.stdin.isatty() and STDIN_MONITOR_LOCK.acquire(blocking=False)
+    if owns_stdin:
         terminal_state = termios.tcgetattr(sys.stdin.fileno())
         tty.setcbreak(sys.stdin.fileno())
     try:
         while time.monotonic() < deadline:
+            if CANCEL_ALL_DOWNLOADS.is_set():
+                process.terminate()
+                try:
+                    process.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait()
+                cancelled = True
+                break
             if terminal_state and select.select([sys.stdin], [], [], 0)[0]:
                 if sys.stdin.read(1) == "\x1b":
-                    termios.tcsetattr(sys.stdin.fileno(), termios.TCSADRAIN, terminal_state)
-                    answer = input("Do you want to stop current downloading? (y/n) ")
-                    if answer.strip().lower() in ("y", "yes"):
+                    # Still in cbreak mode (echo stays on), so a single
+                    # keypress answers immediately without needing Enter.
+                    sys.stdout.write("? stop downloading? (y/n) ")
+                    sys.stdout.flush()
+                    answer = ""
+                    while answer not in ("y", "Y", "n", "N"):
+                        answer = sys.stdin.read(1)
+                    sys.stdout.write("\n")
+                    if answer.lower() == "y":
+                        CANCEL_ALL_DOWNLOADS.set()
                         process.terminate()
-                        process.wait(timeout=5)
+                        try:
+                            process.wait(timeout=5)
+                        except subprocess.TimeoutExpired:
+                            process.kill()
+                            process.wait()
                         cancelled = True
                         break
-                    tty.setcbreak(sys.stdin.fileno())
             try:
                 line = output_queue.get(timeout=0.1)
                 if line is None:
@@ -380,6 +546,17 @@ def _run_tidekeeper(command, environment, timeout, progress_callback=None):
                     break
                 if "[DL Track] name=" in line:
                     tqdm.write(t.busy(f"downloading '{line.split('[DL Track] name=', 1)[1].strip()}'..."))
+                if "Too many requests" in line:
+                    _, last_hour, last_minute = _request_counts()
+                    wait_match = re.search(r"waiting (\d+) seconds?", line)
+                    wait_s = wait_match.group(1) if wait_match else "?"
+                    body = (
+                        f"Too many requests - waiting {wait_s}s before retry. "
+                        f"(attempts: {last_hour} last hour, {last_minute} last min)"
+                    )
+                    tail = f"@ {datetime.now():%H:%M}"
+                    tqdm.write(t.warning(t.right_align(body, tail, prefix_len=2)))  # "! " from warning()
+                    _note_rate_limited()
             except Empty:
                 if process.poll() is not None:
                     finished = True
@@ -390,8 +567,12 @@ def _run_tidekeeper(command, environment, timeout, progress_callback=None):
             raise subprocess.TimeoutExpired(command, timeout)
         return process.returncode, "".join(output), cancelled, token_expired, session_stale
     finally:
-        if terminal_state:
-            termios.tcsetattr(sys.stdin.fileno(), termios.TCSADRAIN, terminal_state)
+        with _ACTIVE_PROCESSES_LOCK:
+            _ACTIVE_PROCESSES.discard(process)
+        if owns_stdin:
+            if terminal_state:
+                termios.tcsetattr(sys.stdin.fileno(), termios.TCSADRAIN, terminal_state)
+            STDIN_MONITOR_LOCK.release()
 
 
 def check_login():
@@ -471,9 +652,14 @@ def login_tidekeeper():
 
 
 def download_url(
-    url, timeout=300, display_name=None, cleanup_partials=True, return_titles=False,
+    url, timeout=240, display_name=None, cleanup_partials=True, return_titles=False,
     refresh_callback=None, reauth_callback=None, progress_callback=None,
 ):
+    _note_request()
+    delay = _current_rate_limit_delay()
+    if delay:
+        time.sleep(delay)
+
     with TIDEKEEPER_SETUP_LOCK:
         check_and_install_tidekeeper()
 
@@ -509,6 +695,7 @@ def download_url(
     previous_files = _flac_files(effective_download_path)
     previous_stray_files = _stray_audio_files(effective_download_path)
 
+    _enter_download()
     try:
         for refresh_attempt in range(2):
             return_code, output, cancelled, token_expired, session_stale = _run_tidekeeper(
@@ -524,7 +711,7 @@ def download_url(
             else:
                 tqdm.write(t.busy("access token expired; refreshing before continuing"))
                 callback = refresh_callback
-            _remove_partial_files(effective_download_path)
+            _safe_remove_partial_files(effective_download_path)
             try:
                 refreshed = callback and callback()
             except Exception:
@@ -540,7 +727,7 @@ def download_url(
                 if session_stale else "TIDAL access token refreshed; retrying download"
             ))
         if cleanup_partials:
-            _remove_partial_files(effective_download_path)
+            _safe_remove_partial_files(effective_download_path)
         _convert_stray_audio_files(effective_download_path, previous_stray_files)
         completed_files, reported_titles, skipped_titles, skipped_files = _report_downloads(
             output, effective_download_path, previous_files
@@ -553,31 +740,35 @@ def download_url(
             ))
         linked_existing = False
         try:
-            # SQLite supports concurrent readers, but serializing imports avoids
-            # write-lock contention when several download batches finish together.
-            with DATABASE_IMPORT_LOCK:
-                library = MusicLibrary(
-                    Path(effective_download_path).parent,
-                    settings.get("databaseLocation"),
-                )
-                tidal_track_id = _tidal_track_id(url)
-                for flac_file in completed_files:
-                    for attempt in range(3):
-                        try:
+            tidal_track_id = _tidal_track_id(url)
+            for flac_file in completed_files:
+                for attempt in range(3):
+                    try:
+                        # SQLite supports concurrent readers, but serializing
+                        # imports avoids write-lock contention when several
+                        # download batches finish together. Only the actual
+                        # import is held under the lock; the retry backoff
+                        # sleep below runs outside it, so a slow/failing
+                        # import doesn't block every other thread's import.
+                        with DATABASE_IMPORT_LOCK:
+                            library = MusicLibrary(
+                                Path(effective_download_path).parent,
+                                settings.get("databaseLocation"),
+                            )
                             local_track_id = library.import_file(
                                 flac_file, tidal_id=tidal_track_id
                             )
-                            if tidal_track_id and flac_file in skipped_files:
-                                linked_existing = True
-                            break
-                        except Exception as error:
-                            if attempt == 2:
-                                tqdm.write(t.error(
-                                    "unable to index downloaded track "
-                                    f"{t.grey(str(error))}"
-                                ))
-                            else:
-                                time.sleep(attempt + 1)
+                        if tidal_track_id and flac_file in skipped_files:
+                            linked_existing = True
+                        break
+                    except Exception as error:
+                        if attempt == 2:
+                            tqdm.write(t.error(
+                                "unable to index downloaded track "
+                                f"{t.grey(str(error))}"
+                            ))
+                        else:
+                            time.sleep(attempt + 1)
         except Exception as error:
             tqdm.write(t.error(
                 "unable to initialize local database "
@@ -608,8 +799,10 @@ def download_url(
                     daemon=True,
                 ).start()
         if cancelled:
-            tqdm.write(t.log("download cancelled"))
-            return None
+            # Distinct from a plain failure: the caller (doctor.py) needs to
+            # know this was a deliberate stop so it aborts the whole batch
+            # instead of quietly moving on to the next track.
+            raise DownloadCancelled("download cancelled by user")
         if return_code != 0 and not (
             (reported_titles or skipped_titles) and "[ERR]" not in output
         ):
@@ -625,14 +818,17 @@ def download_url(
         )
     except subprocess.TimeoutExpired:
         if cleanup_partials:
-            _remove_partial_files(effective_download_path)
+            _safe_remove_partial_files(effective_download_path)
         failed_tracks = Path(effective_download_path) / "failed-tracks.txt"
         tqdm.write(
             f"{t.red('!')} download timed out after {timeout} seconds; "
             f"error saved to {t.grey(str(failed_tracks))}"
         )
         return None
+    finally:
+        _exit_download()
+        _decay_rate_limit_delay()
 
 
-def download_playlist(playlist_id, timeout=300):
+def download_playlist(playlist_id, timeout=240):
     download_url(f"https://tidal.com/browse/playlist/{playlist_id}", timeout)

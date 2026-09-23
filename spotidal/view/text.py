@@ -1,3 +1,4 @@
+import shutil
 from enum import Enum
 
 
@@ -41,7 +42,7 @@ class Text:
 
     @staticmethod
     def log_grey(text):
-        return str(Colors.GREY_MID) + "_" + text
+        return " " + str(Colors.GREY_MID) + "_ " + text
     
     @staticmethod
     def error(text):
@@ -58,6 +59,21 @@ class Text:
     @staticmethod
     def red(text):
         return str(Colors.RED) + text + str(Colors.WHITE)
+
+    @staticmethod
+    def right_align(body, tail, min_pad=1, prefix_len=0):
+        """Pad `body` with spaces so `tail` lands flush with the terminal's
+        right edge, recalculated from the current window width each call
+        (rather than a fixed guessed column) so it stays aligned if the
+        terminal gets resized.
+
+        `prefix_len` accounts for characters a caller will still prepend
+        after this returns (e.g. the "_" a report.info()/log_grey() call
+        adds, or the "! " a warning()/error() call adds) — without it the
+        line ends up that many columns too wide."""
+        columns = shutil.get_terminal_size(fallback=(100, 24)).columns
+        pad = max(min_pad, columns - prefix_len - len(body) - len(tail))
+        return f"{body}{' ' * pad}{tail}"
 
     @staticmethod
     def display_selection(selection):

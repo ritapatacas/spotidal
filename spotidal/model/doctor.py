@@ -3,7 +3,10 @@ import json
 import re
 import shutil
 import subprocess
+import threading
 import time
+import types
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
 
@@ -12,7 +15,10 @@ from mutagen.flac import FLAC
 from mutagen.id3 import ID3
 from tqdm import tqdm
 
-from .helpers.td_downloader import TidalSessionStaleError, refresh_tidekeeper_token
+from .helpers.td_downloader import (
+    DownloadCancelled, TidalSessionStaleError, refresh_tidekeeper_token,
+    _current_rate_limit_delay,
+)
 from .helpers.sync.playlists_handler import get_td_playlists_wrapper
 from .helpers.tidalapi import get_all_playlist_tracks
 from .helpers.type.file import Files
@@ -28,6 +34,9 @@ LOG_DIR = Path("~/.config/spotidal/logs").expanduser()
 _ANSI_RE = re.compile(r"\033\[[0-9;]*m")
 
 
+_MISSING_TRACKS_ANALYSIS_LOCK = threading.Lock()
+
+
 class DoctorReport:
     def __init__(self, name):
         self.name = name
@@ -41,7 +50,7 @@ class DoctorReport:
     def _record(self, rendered, kind):
         plain = _ANSI_RE.sub("", rendered)
         self.lines.append(plain)
-        print(rendered)
+        tqdm.write(rendered)
 
     def ok(self, text):
         self.ok_count += 1
@@ -72,7 +81,7 @@ class DoctorReport:
             f"({self.ok_count} ok, {self.warning_count} warnings, "
             f"{self.failed_count} failures)"
         )
-        print(t.log(summary) if self.success else t.error(summary))
+        tqdm.write(t.log(summary) if self.success else t.error(summary))
         self.lines.append(summary)
         stamp = self.started.strftime("%Y%m%d-%H%M%S")
         slug = re.sub(r"[^a-z0-9]+", "-", self.name.casefold()).strip("-")
@@ -80,9 +89,9 @@ class DoctorReport:
             LOG_DIR.mkdir(parents=True, exist_ok=True)
             log_path = LOG_DIR / f"doctor-{slug}-{stamp}.log"
             log_path.write_text("\n".join(self.lines) + "\n", encoding="utf-8")
-            print(t.log_grey(f"report saved to {log_path}"))
+            tqdm.write(t.log_grey(f"report saved to {log_path}"))
         except OSError as error:
-            print(t.warning(f"unable to write doctor log: {error}"))
+            tqdm.write(t.warning(f"unable to write doctor log: {error}"))
         return self.success
 
 
@@ -418,9 +427,7 @@ class Doctor:
             )
         return report.finish()
 
-    def run_missing_tracks_doctor(self, confirm=True):
-        from InquirerPy import prompt as inquirer_prompt
-
+    def run_missing_tracks_doctor(self, confirm=True, mode="find_and_download"):
         report = DoctorReport("missing tracks")
         td_session = (self._model.sessions or {}).get("td")
         if td_session is None:
@@ -435,18 +442,35 @@ class Doctor:
             report.fail("local database is disabled or unavailable")
             return report.finish()
 
-        names = self._selection_names()
-        report.info(f"checking {len(names)} selected playlist(s) against TIDAL")
-        if not names:
-            report.warn("no playlists are selected (utils > manage selected playlist)")
+        if mode == "download":
+            unique_tracks = self._load_missing_tracks_analysis(report)
+            if unique_tracks is None:
+                return report.finish()
+        else:
+            names = self._selection_names()
+            report.info(f"checking {len(names)} selected playlist(s) against TIDAL")
+            if not names:
+                report.warn("no playlists are selected (utils > manage selected playlist)")
+                return report.finish()
+            try:
+                td_playlists = get_td_playlists_wrapper(td_session)
+            except Exception as error:
+                report.fail(f"unable to fetch TIDAL playlists: {error}")
+                return report.finish()
+            unique_tracks = self._analyze_missing_tracks(report, td_playlists, library, names)
+            self._save_missing_tracks_analysis(unique_tracks)
+            if mode == "find":
+                return report.finish()
+
+        if not unique_tracks:
+            report.info("no missing tracks to download")
             return report.finish()
 
-        try:
-            td_playlists = get_td_playlists_wrapper(td_session)
-        except Exception as error:
-            report.fail(f"unable to fetch TIDAL playlists: {error}")
-            return report.finish()
+        return self._download_missing_tracks(
+            report, td_session, library, unique_tracks, confirm
+        )
 
+    def _analyze_missing_tracks(self, report, td_playlists, library, names):
         missing = []
         for name in tqdm(sorted(names, key=str.casefold),
                          desc=t.busy("analyzing playlists"), unit="playlist"):
@@ -497,14 +521,86 @@ class Doctor:
         report.step("analysis")
         unique_tracks = {}
         for playlist_name, track in missing:
-            entry = unique_tracks.setdefault(str(track.id), {"track": track, "playlists": []})
+            entry = unique_tracks.setdefault(str(track.id), {
+                "track": track,
+                "label": _format_track_line(track),
+                "name": getattr(track, "name", str(track)),
+                "artist_name": getattr(getattr(track, "artist", None), "name", "") or ", ".join(
+                    getattr(a, "name", "") for a in (getattr(track, "artists", None) or [])
+                ),
+                "playlists": [],
+            })
             entry["playlists"].append(playlist_name)
         report.info(
             f"total missing tracks across selection: {len(missing)} "
             f"({len(unique_tracks)} unique)"
         )
-        if not unique_tracks:
-            return report.finish()
+        return unique_tracks
+
+    def _save_missing_tracks_analysis(self, unique_tracks):
+        try:
+            Files.MISSING_TRACKS_ANALYSIS.save({
+                "analyzed_at": datetime.now().isoformat(timespec="seconds"),
+                "tracks": {
+                    tidal_id: {
+                        "label": entry["label"],
+                        "name": entry["name"],
+                        "artist_name": entry["artist_name"],
+                        "playlists": entry["playlists"],
+                    }
+                    for tidal_id, entry in unique_tracks.items()
+                },
+            })
+        except Exception:
+            pass
+
+    def _load_missing_tracks_analysis(self, report):
+        data = Files.MISSING_TRACKS_ANALYSIS.load() or {}
+        tracks = data.get("tracks") or {}
+        if not tracks:
+            report.warn(
+                "no saved analysis found; run 'find missing tracks' "
+                "(or 'find and download missing tracks') first"
+            )
+            return None
+        analyzed_at = data.get("analyzed_at", "unknown time")
+        tqdm.write("")
+        report.info(t.right_align(
+            f"using previous analysis from {analyzed_at} - {len(tracks)} tracks",
+            f"@ {datetime.now():%H:%M}",
+            prefix_len=3,  # report.info() prepends " _ " via log_grey
+        ))
+        return {
+            tidal_id: {
+                "track": None,
+                "label": entry["label"],
+                "name": entry.get("name", ""),
+                "artist_name": entry.get("artist_name", ""),
+                "playlists": entry["playlists"],
+            }
+            for tidal_id, entry in tracks.items()
+        }
+
+    def _prune_missing_tracks_analysis(self, resolved_ids):
+        if not resolved_ids:
+            return
+        with _MISSING_TRACKS_ANALYSIS_LOCK:
+            try:
+                data = Files.MISSING_TRACKS_ANALYSIS.load() or {}
+                tracks = data.get("tracks") or {}
+                remaining = {
+                    tidal_id: entry for tidal_id, entry in tracks.items()
+                    if tidal_id not in resolved_ids
+                }
+                if len(remaining) == len(tracks):
+                    return
+                data["tracks"] = remaining
+                Files.MISSING_TRACKS_ANALYSIS.save(data)
+            except Exception:
+                pass
+
+    def _download_missing_tracks(self, report, td_session, library, unique_tracks, confirm):
+        from InquirerPy import prompt as inquirer_prompt
 
         if confirm:
             answer = inquirer_prompt([{
@@ -517,6 +613,8 @@ class Doctor:
                 report.info("download attempts cancelled")
                 return report.finish()
 
+        report.info(f"delay between requests: {_current_rate_limit_delay():.1f}s")
+
         def indexed_files_rows(tidal_id):
             try:
                 return [
@@ -527,63 +625,159 @@ class Doctor:
             except Exception:
                 return []
 
-        downloaded = 0
+        # Split off tracks that are already indexed (e.g. downloaded since
+        # the analysis was saved) before spinning up the thread pool, and
+        # report them as one grouped block instead of a line per track.
+        already_available = []
+        pending = {}
+        for tidal_id, entry in unique_tracks.items():
+            if indexed_files_rows(tidal_id):
+                already_available.append((tidal_id, entry))
+            else:
+                pending[tidal_id] = entry
+
+        resolved_ids = {tidal_id for tidal_id, _ in already_available}
+        if already_available:
+            report.step("already available")
+            for _, entry in already_available:
+                report.info(f"  {entry['label']} ({', '.join(entry['playlists'])})")
+            report.info(
+                f"skipping {len(already_available)} track(s) - "
+                f"{len(pending)} still missing"
+            )
+            # Prune immediately rather than waiting for the whole (possibly
+            # hours-long) run to finish, so an interrupted/restarted run
+            # doesn't leave the saved analysis stale.
+            self._prune_missing_tracks_analysis(resolved_ids)
+
+        downloaded = len(already_available)
         failures = []
         not_found = []
-        for tidal_id, entry in tqdm(
-            unique_tracks.items(), desc=t.busy("downloading missing tracks"), unit="track"
-        ):
-            track = entry["track"]
-            label = f"{_format_track_line(track)} ({', '.join(entry['playlists'])})"
+        stale_session = threading.Event()
+        download_workers = 2
+
+        def _stand_in_track(entry):
+            artist = types.SimpleNamespace(name=entry.get("artist_name", ""))
+            return types.SimpleNamespace(
+                name=entry.get("name", ""), artist=artist, artists=[artist],
+                album=None, full_name=None,
+            )
+
+        def _process_one(tidal_id, entry):
+            label = f"{entry['label']} ({', '.join(entry['playlists'])})"
+            if stale_session.is_set():
+                return ("skipped", label)
             # A concurrent instance (watcher/other download) may have already
             # indexed the track since the analysis pass.
             if indexed_files_rows(tidal_id):
-                downloaded += 1
-                report.info(f"already available, skipping: {label}")
-                continue
+                return ("downloaded", label, "already available, skipping: {label}")
             try:
                 result = self._downloader.by_track_url(
-                    f"https://tidal.com/track/{track.id}", return_titles=True
+                    f"https://tidal.com/track/{tidal_id}", return_titles=True
                 )
             except TidalSessionStaleError:
-                report.fail("TIDAL session is stale; aborting downloads")
-                break
+                stale_session.set()
+                return ("stale", label)
+            except DownloadCancelled:
+                stale_session.set()
+                return ("cancelled", label)
             except Exception as error:
-                failures.append((label, f"download error: {error}"))
-                continue
+                return ("failure", label, f"download error: {error}")
             if not result:
                 # tidekeeper reported a failure, but the file may still be on
                 # disk and indexed (e.g. matched by a concurrent importer).
                 if indexed_files_rows(tidal_id):
-                    downloaded += 1
-                    report.info(f"tidekeeper failed but track is already indexed: {label}")
+                    return (
+                        "downloaded", label,
+                        "tidekeeper failed but track is already indexed: {label}",
+                    )
                 elif not self._track_exists_on_tidal(td_session, tidal_id):
-                    not_found.append((label, track))
+                    return ("not_found", label, entry.get("track") or _stand_in_track(entry))
                 else:
-                    failures.append((label, "tidekeeper download failed"))
-                continue
+                    return ("failure", label, "tidekeeper download failed")
             healthy = indexed_files_rows(tidal_id)
             if not healthy:
                 try:
                     rows = library.file_details_for_tidal_id(tidal_id)
                 except Exception as error:
-                    failures.append((label, f"db verification error: {error}"))
-                    continue
+                    return ("failure", label, f"db verification error: {error}")
                 if rows:
-                    failures.append((label, "indexed but marked missing in the db"))
-                else:
-                    failures.append(
-                        (label, "no files table entry after download (import failed)")
-                    )
-                continue
+                    return ("failure", label, "indexed but marked missing in the db")
+                return (
+                    "failure", label,
+                    "no files table entry after download (import failed)",
+                )
             track_row_id = healthy[0][0]
             tag_track_id = _read_track_id(Path(healthy[0][7]).expanduser() / healthy[0][4])
             if tag_track_id and tag_track_id != track_row_id:
-                failures.append(
-                    (label, f"TRACK_ID tag {tag_track_id} != track_id {track_row_id}")
+                return (
+                    "failure", label,
+                    f"TRACK_ID tag {tag_track_id} != track_id {track_row_id}",
                 )
-                continue
-            downloaded += 1
+            return ("downloaded", label, None)
+
+        # A live \r-redrawn bar fights with the worker threads' own
+        # tqdm.write() calls (access token, "Too many requests",
+        # conversions, ...) no matter how the two are synchronized, because
+        # a bar redraw and a plain log line are fundamentally different
+        # things sharing one terminal line. Simpler and reliable: no bar,
+        # just a plain snapshot line printed to scrollback per track.
+        total = len(pending)
+        count_width = len(str(total))
+        start = time.monotonic()
+        progress_lock = threading.Lock()
+        n_done = 0
+
+        def _format_elapsed(seconds):
+            minutes, secs = divmod(int(seconds), 60)
+            hours, minutes = divmod(minutes, 60)
+            return f"{hours}:{minutes:02d}:{secs:02d}" if hours else f"{minutes:02d}:{secs:02d}"
+
+        def _report_progress():
+            nonlocal n_done
+            with progress_lock:
+                n_done += 1
+                n = n_done
+            elapsed = time.monotonic() - start
+            left = total - n
+            pct = 100 * n / total if total else 100
+            rate = elapsed / n if n else 0
+            body = (
+                f" .. downloading  -  {pct:3.0f}%  -  {n:>{count_width}}/{total} "
+                f"- {left:>{count_width}} left  -  {rate:.0f}s/t"
+            )
+            tail = f"[{_format_elapsed(elapsed)}] @ {datetime.now():%H:%M}"
+            report.info(t.right_align(body, tail, prefix_len=3))  # " _ " from log_grey
+
+        with ThreadPoolExecutor(max_workers=download_workers) as executor:
+            futures = {
+                executor.submit(_process_one, tidal_id, entry): tidal_id
+                for tidal_id, entry in pending.items()
+            }
+            for future in as_completed(futures):
+                tidal_id = futures[future]
+                outcome = future.result()
+                kind, label, *rest = outcome
+                if kind == "downloaded":
+                    downloaded += 1
+                    resolved_ids.add(tidal_id)
+                    # Prune per track (not just at the very end) so a run
+                    # that gets interrupted partway still leaves the saved
+                    # analysis reflecting what was actually resolved.
+                    self._prune_missing_tracks_analysis({tidal_id})
+                    if rest and rest[0]:
+                        report.info(rest[0].format(label=label))
+                elif kind == "not_found":
+                    not_found.append((label, rest[0]))
+                elif kind == "failure":
+                    failures.append((label, rest[0]))
+                elif kind == "stale":
+                    report.fail("TIDAL session is stale; aborting downloads")
+                elif kind == "cancelled":
+                    report.info("download cancelled by user; aborting remaining downloads")
+                # "skipped" tracks (queued after a stale session was detected)
+                # are silently dropped from the counts, same as never attempted.
+                _report_progress()
 
         report.step("download results")
         report.info(

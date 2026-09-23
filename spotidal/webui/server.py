@@ -5,6 +5,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
 from ..model.library import camelot_related
+from ..view.text import Text as t
 from .page import PAGE_HTML, SUGGEST_PAGE_HTML
 
 
@@ -79,17 +80,28 @@ class _Handler(BaseHTTPRequestHandler):
             self._send_json({"error": "not found"}, status=404)
 
 
+_server = None
+_server_url = None
+
+
 def run_server(library, host="127.0.0.1", port=8383, open_browser=True):
-    """Blocks serving the search UI until Ctrl+C."""
+    """Starts the search UI in the background and returns immediately."""
+    global _server, _server_url
+    url = f"http://{host}:{port}/"
+    display_url = f"http://{host}:{port}"
+    if _server is not None:
+        # Already running from an earlier 'explore library' menu visit; just
+        # surface it again instead of trying to bind the port a second time.
+        print(t.log(f"UI running at: {display_url}"))
+        if open_browser:
+            webbrowser.open(_server_url)
+        return
+
     handler = type("BoundHandler", (_Handler,), {"library": library})
     server = ThreadingHTTPServer((host, port), handler)
-    url = f"http://{host}:{port}/"
+    _server = server
+    _server_url = url
+    threading.Thread(target=server.serve_forever, daemon=True).start()
     if open_browser:
         threading.Timer(0.4, lambda: webbrowser.open(url)).start()
-    print(f"search UI running at {url} (Ctrl+C to stop)")
-    try:
-        server.serve_forever()
-    except KeyboardInterrupt:
-        pass
-    finally:
-        server.server_close()
+    print(t.log(f"UI running at: {display_url}"))

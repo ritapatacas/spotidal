@@ -29,9 +29,22 @@ def clear_td_playlist(playlist: tidalapi.UserPlaylist, chunk_size: int = 20):
         desc="> erasing existing tracks from tidal playlist", total=playlist.num_tracks
     ) as progress:
         while playlist.num_tracks:
+            before = playlist.num_tracks
             indices = range(min(playlist.num_tracks, chunk_size))
-            _remove_indices_from_playlist(playlist, indices)
-            progress.update(len(indices))
+            try:
+                _remove_indices_from_playlist(playlist, indices)
+            except Exception as error:
+                if getattr(getattr(error, "response", None), "status_code", None) != 412:
+                    raise
+                # a stale etag can mean the delete partially landed server-side,
+                # so recompute indices against the refreshed track count
+                playlist._reparse()
+                if not playlist.num_tracks:
+                    progress.update(before - playlist.num_tracks)
+                    continue
+                indices = range(min(playlist.num_tracks, chunk_size))
+                _remove_indices_from_playlist(playlist, indices)
+            progress.update(before - playlist.num_tracks)
 
 def add_multiple_tracks_to_playlist(
     playlist: tidalapi.UserPlaylist, track_ids: List[int], chunk_size: int = 20

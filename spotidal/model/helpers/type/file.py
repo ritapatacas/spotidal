@@ -22,6 +22,7 @@ class Files(Enum):
     PARSED_PLAYLISTS = Path.USR, 'parsed_playlists', Ext.YML
     SELECTION = Path.USR, 'selection', Ext.JSON
     NOT_FOUND = Path.USR, 'not_found', Ext.YML
+    MISSING_TRACKS_ANALYSIS = Path.USR, 'missing_tracks_analysis', Ext.JSON
     CREDENTIALS = Path.USR, "credentials", Ext.YML
 
     def save(self, data, playlist_name=None):

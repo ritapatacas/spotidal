@@ -120,22 +120,20 @@ class ControllerMain:
         return True
 
     def sync(self, e):
-        if isinstance(e, list):
-            for p in e:
-                self._start_playlist_job(p)
-                info = self._playlist_info(p)
-                if info and info.get("sp_id"):
-                    self._sync.by_sp_id(info["sp_id"])
-        else:
-            self._start_playlist_job(e)
-            info = self._playlist_info(e)
+        for p in e if isinstance(e, list) else [e]:
+            info = self._start_playlist_job(p)
             if info and info.get("sp_id"):
                 self._sync.by_sp_id(info["sp_id"])
+            else:
+                print(t.warning(
+                    f"skipping '{str(p)}': no matching spotify playlist id"
+                ))
 
     def _start_playlist_job(self, reference):
         info = self._playlist_info(reference)
         name = info["name"] if info else str(reference)
         print("\n" + t.log(f"playlist '{name}'"))
+        return info
 
     def sync_url(self, url):
         parsed = urlparse(url.strip())
@@ -463,7 +461,27 @@ class ControllerMain:
         return self._doctor.run_playlists_doctor()
 
     def doctor_missing_tracks(self):
-        return self._doctor.run_missing_tracks_doctor()
+        from ..view.prompt import MissingTracksModeMenu
+
+        action = view.missing_tracks_mode_menu()
+        modes = {
+            MissingTracksModeMenu.DOWNLOAD: "download",
+            MissingTracksModeMenu.FIND: "find",
+            MissingTracksModeMenu.FIND_AND_DOWNLOAD: "find_and_download",
+        }
+        mode = modes.get(action)
+        if mode is None:
+            return None
+        # Choosing "download current missing tracks" from the menu is
+        # itself the confirmation; don't ask a second time.
+        confirm = mode != "download"
+        return self._doctor.run_missing_tracks_doctor(mode=mode, confirm=confirm)
+
+    def download_current_missing_tracks(self):
+        # Shortcut for the "download current missing tracks" menu entry:
+        # skips the mode-selection submenu and the confirm prompt, since
+        # picking this entry directly is already the confirmation.
+        return self._doctor.run_missing_tracks_doctor(mode="download", confirm=False)
 
     def doctor_mp3_quality(self):
         return self._doctor.run_mp3_quality_doctor()

@@ -1,5 +1,6 @@
 import sys
 import time
+import warnings
 from spotidal.model.model import Model
 from spotidal.controller.playlist_controller import PlaylistController
 from spotidal.controller.controller_main import ControllerMain
@@ -11,6 +12,7 @@ from spotidal.model.helpers.td_downloader import (
     TidalSessionStaleError,
     pop_conversion_messages,
 )
+from spotidal.model.helpers.sync.search import pop_not_found_tracks
 from spotidal.view.setup import get_credentials
 
 from spotidal.view.prompt import (
@@ -18,6 +20,11 @@ from spotidal.view.prompt import (
     SelectionModeMenu,
     SettingsMenu,
     UtilsMenu,
+)
+
+
+warnings.filterwarnings(
+    "ignore", category=DeprecationWarning, module=r"spotipy\.client"
 )
 
 
@@ -54,6 +61,11 @@ class Controller:
     def _run_task(self, func, *args, **kwargs):
         started = time.monotonic()
         result = func(*args, **kwargs)
+        not_found = pop_not_found_tracks()
+        if not_found:
+            print(t.error(
+                f"{len(not_found)} track(s) not found: {', '.join(not_found)}"
+            ))
         delay = self.app.get_notify_sound_delay()
         if delay and (time.monotonic() - started) >= delay * 60:
             play_task_done()
@@ -83,7 +95,7 @@ class Controller:
                             "  download: pick playlists and download them\n"
                             "  sync: pick playlists and keep them in sync\n"
                             "  convert: convert downloaded FLAC files to MP3\n"
-                            "  search: browse/filter your local library and get mixing suggestions (opens a browser tab)\n"
+                            "  explore library: browse/filter your local library and get mixing suggestions (opens a browser tab)\n"
                             "  utils: playlist selection, tmp cleanup, session refresh, database tools, rekordbox export\n"
                             "  settings: downloads and database configuration"
                         ))
@@ -94,7 +106,13 @@ class Controller:
                 elif menu == MainMenu.SYNC[0] or menu == MainMenu.DOWNLOAD[0]:
                     if self.model.current_selection:
                         print(t.display_selection(self.model.current_selection))
-                    action = view.selection_mode_menu(True)
+                    action = view.selection_mode_menu(
+                        True, include_missing_tracks=(menu == MainMenu.DOWNLOAD[0])
+                    )
+
+                    if action == SelectionModeMenu.DOWNLOAD_MISSING:
+                        self._run_task(self.app.download_current_missing_tracks)
+                        continue
 
                     if action == SelectionModeMenu.SEARCH[0]:
                         playlists = (
@@ -108,11 +126,11 @@ class Controller:
                         self.model.current_selection.add(selected)
 
                     elif action == SelectionModeMenu.SELECT[0]:
-                        result = view.select_menu(self.playlists.not_selected())
-                        if not result:
+                        preselected = self.model.current_selection or set(self.playlists.load())
+                        result = view.select_menu(self.playlists.names(), preselected)
+                        if result is None:
                             continue
-                        for r in result:
-                            self.model.current_selection.add(r)
+                        self.model.current_selection = set(result)
 
                     elif action == SelectionModeMenu.LOAD:
                         selection = set(self.playlists.load())
@@ -224,10 +242,9 @@ class Controller:
                 if selected:
                     selection.add(selected)
             elif action == SelectionModeMenu.SELECT[0]:
-                result = view.select_menu(self.playlists.not_selected())
-                if result:
-                    for r in result:
-                        selection.add(r)
+                result = view.select_menu(self.playlists.names(), selection)
+                if result is not None:
+                    selection = set(result)
             elif action == SelectionModeMenu.LOAD:
                 selection |= set(self.playlists.load())
             elif action == SelectionModeMenu.URL:
@@ -284,6 +301,7 @@ class Controller:
         self._run_submenu(UtilsMenu.DOWNLOAD, UtilsMenu.DOWNLOAD_OPT, {
             UtilsMenu.DOCTOR_DOWNLOAD: lambda: self._run_task(self.app.doctor_download),
             UtilsMenu.DOCTOR_MISSING_TRACKS: lambda: self._run_task(self.app.doctor_missing_tracks),
+            UtilsMenu.DOWNLOAD_CURRENT_MISSING: lambda: self._run_task(self.app.download_current_missing_tracks),
             UtilsMenu.TIDEKEEPER_DOCTOR: self.app.tidekeeper_doctor,
             UtilsMenu.CLEAN_TMP: lambda: self._run_task(self.app.clean_tmp),
             UtilsMenu.REFRESH_SESSION: self._refresh_tidal_session,

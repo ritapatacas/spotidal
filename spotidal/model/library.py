@@ -270,6 +270,10 @@ class MusicLibrary:
                 connection.execute("ALTER TABLE tracks ADD COLUMN bpm REAL")
             if "musical_key" not in track_columns:
                 connection.execute("ALTER TABLE tracks ADD COLUMN musical_key TEXT")
+            if "review_reason" not in track_columns:
+                connection.execute("ALTER TABLE tracks ADD COLUMN review_reason TEXT")
+            if "reviewed_at" not in track_columns:
+                connection.execute("ALTER TABLE tracks ADD COLUMN reviewed_at TEXT")
             playlist_columns = {
                 row[1] for row in connection.execute("PRAGMA table_info(playlists)")
             }

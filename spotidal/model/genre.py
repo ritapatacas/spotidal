@@ -548,6 +548,12 @@ class GenreFiller:
         workers = 6 if client.authenticated else 4
         resolved = 0
         queue = []
+        # Right-align each growing number so the line doesn't reflow as
+        # digit counts change (9 -> 10, etc). index/resolved/to-review are
+        # all bounded by the total; api calls can run somewhat ahead of it
+        # (more than one call per track), so give it extra headroom.
+        total_width = len(str(len(todo)))
+        calls_width = len(str(len(todo) * 3))
         with ThreadPoolExecutor(max_workers=workers) as pool:
             futures = [
                 pool.submit(self._resolve, client, track_id, entry)
@@ -566,9 +572,9 @@ class GenreFiller:
                     queue.append((track_id, entry, matches))
                 if index % 10 == 0 or index == len(futures):
                     self.log(
-                        f"{index}/{len(futures)} resolved, "
-                        f"{resolved} tagged, {len(queue)} to review "
-                        f"({client.calls} api calls)"
+                        f"{index:>{total_width}}/{len(futures)} resolved, "
+                        f"{resolved:>{total_width}} tagged, {len(queue):>{total_width}} to review "
+                        f"({client.calls:>{calls_width}} api calls)"
                     )
         client.flush()
         queue.sort(key=lambda item: ((item[1]["album"] or ""), (item[1]["title"] or "")))

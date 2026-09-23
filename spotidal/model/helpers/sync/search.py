@@ -13,6 +13,14 @@ from ..sync import match as _match
 from . import cache as _cache
 from . import request_utils as _req
 
+_NOT_FOUND_TRACKS = []
+
+
+def pop_not_found_tracks():
+    tracks = list(_NOT_FOUND_TRACKS)
+    _NOT_FOUND_TRACKS.clear()
+    return tracks
+
 async def td_search(
     sp_track, rate_limiter, td_session: tidalapi.Session
 ) -> tidalapi.Track | None:
@@ -135,8 +143,10 @@ async def search_new_tracks_on_td(
             }
 
             songs404.append(track_dict)
-            print(t.error(f" could not find the track '{track_dict['track']['name']} {track_dict['track']['artists']}'"))
-            
+            _NOT_FOUND_TRACKS.append(
+                f"{track_dict['track']['name']} {track_dict['track']['artists']}"
+            )
+
     if songs404.__len__() > 0:
         Files.NOT_FOUND.save(songs404, playlist_name)
 
