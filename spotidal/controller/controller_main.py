@@ -39,6 +39,16 @@ def _normalize_for_match(text):
     return " ".join(text.casefold().split())
 
 
+def _strip_version_suffix(text):
+    # "Song - Remastered 2011" / "Song (Radio Mix)" / "Song [Live]" all
+    # describe the same underlying song as plain "Song" — cut everything
+    # from the first " - ", "(" or "[" so version/remaster/edit labels
+    # don't register as a title or album mismatch.
+    text = re.sub(r"\s*[-–].*$", "", text or "")
+    text = re.sub(r"\s*[\(\[].*$", "", text)
+    return text.strip()
+
+
 def _format_track(candidate):
     artists = ", ".join(a.name for a in (getattr(candidate, "artists", None) or []))
     name = getattr(candidate, "full_name", None) or candidate.name
@@ -372,13 +382,13 @@ class ControllerMain:
                 checked += 1
 
                 mismatches = []
-                if _normalize_for_match(local["title"]) != _normalize_for_match(title):
+                if _normalize_for_match(_strip_version_suffix(local["title"])) != _normalize_for_match(_strip_version_suffix(title)):
                     mismatches.append(f"title mismatch (db={local['title']!r} vs spotify={title!r})")
                 local_artists = {_normalize_for_match(a) for a in _split_artists(local["artist"] or "")}
                 sp_artists = {_normalize_for_match(a) for a in artists}
                 if local_artists and sp_artists and not (local_artists & sp_artists):
                     mismatches.append(f"artist mismatch (db={local['artist']!r} vs spotify={artist!r})")
-                if local["album"] and album and _normalize_for_match(local["album"]) != _normalize_for_match(album):
+                if local["album"] and album and _normalize_for_match(_strip_version_suffix(local["album"])) != _normalize_for_match(_strip_version_suffix(album)):
                     mismatches.append(f"album mismatch (db={local['album']!r} vs spotify={album!r})")
 
                 try:
