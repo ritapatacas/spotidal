@@ -127,6 +127,12 @@ async def main_async():
     parser.add_argument("--out", default="/Users/ritapatacas/sound-library/playlist_consistency_report.csv")
     parser.add_argument("--skip-tidal-check", action="store_true",
                          help="only check title/artist/album/spotify_id, skip the per-track TIDAL search")
+    parser.add_argument(
+        "--write-db", action="store_true",
+        help="also set tracks.review_reason on a mismatch (and clear it when a "
+             "previously-flagged track re-checks clean) — everything else about "
+             "this script stays read-only",
+    )
     args = parser.parse_args()
 
     sp = auth.open_sp_session()
@@ -200,6 +206,14 @@ async def main_async():
             if not local["spotify_id"]:
                 notes.append("db spotify_id empty")
 
+            mismatches = []
+            if not title_match:
+                mismatches.append(f"title mismatch (db={local['title']!r} vs spotify={title!r})")
+            if not artist_match:
+                mismatches.append(f"artist mismatch (db={local['artist']!r} vs spotify={artist!r})")
+            if album_match is False:
+                mismatches.append(f"album mismatch (db={local['album']!r} vs spotify={album!r})")
+
             tidal_search_id = ""
             tidal_id_match = ""
             if td_session:
@@ -210,8 +224,18 @@ async def main_async():
                     tidal_id_match = str(found.id) == str(local["tidal_id"]) if local["tidal_id"] else None
                     if not local["tidal_id"]:
                         notes.append("db tidal_id empty")
+                    elif not tidal_id_match:
+                        mismatches.append(f"tidal_id mismatch (db={local['tidal_id']} vs found={found.id})")
                 else:
                     notes.append("no confident tidal match found")
+
+            if args.write_db:
+                review_reason = "; ".join(mismatches) if mismatches else None
+                conn.execute(
+                    "UPDATE tracks SET review_reason=?, updated_at=datetime('now') WHERE track_id=?",
+                    (review_reason, local["track_id"]),
+                )
+                conn.commit()
 
             writer.writerow([
                 args.playlist, sp_id, title, artist, album, isrc,
