@@ -129,7 +129,11 @@ def find_loose_match(td_session, tags):
                 print(_grey(f"  rate limited; sleeping {RATE_LIMIT_SLEEP_SECONDS}s"))
                 time.sleep(RATE_LIMIT_SLEEP_SECONDS)
                 continue
-            raise
+            # Transient network hiccups (connection reset, timeout, etc.)
+            # shouldn't take down an hours-long run — back off briefly and
+            # retry the same track a few times before giving up on it.
+            print(_grey(f"  network error ({error}); retrying in 5s"))
+            time.sleep(5)
     return None
 
 
@@ -152,31 +156,44 @@ def main():
 
     total = len(pending)
     start = time.monotonic()
-    matched = downloaded = still_unmatched = 0
+    matched = downloaded = still_unmatched = errors = 0
+
+    def _save_progress():
+        with open(progress_path, "w", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(f, fieldnames=fieldnames)
+            writer.writeheader()
+            writer.writerows(rows)
 
     for i, row in enumerate(pending, 1):
         mp3_path = Path(row["mp3_path"])
-        if not mp3_path.exists():
-            still_unmatched += 1
-            continue
+        try:
+            if not mp3_path.exists():
+                still_unmatched += 1
+                continue
 
-        tags = read_tags(mp3_path)
-        time.sleep(SEARCH_DELAY_SECONDS)
-        track = find_loose_match(td_session, tags)
+            tags = read_tags(mp3_path)
+            time.sleep(SEARCH_DELAY_SECONDS)
+            track = find_loose_match(td_session, tags)
 
-        if not track:
-            still_unmatched += 1
-        else:
-            matched += 1
-            print(_grey(f"  matched TIDAL track {track.id}: {track.artist.name} - {track.name}"))
-            if not args.dry_run:
-                url = f"https://tidal.com/track/{track.id}"
-                result = download_url(url, timeout=240)
-                if result:
-                    downloaded += 1
-                    row["result"] = "downloaded"
-                    row["tidal_id"] = str(track.id)
-                    row["detail"] = track.name
+            if not track:
+                still_unmatched += 1
+            else:
+                matched += 1
+                print(_grey(f"  matched TIDAL track {track.id}: {track.artist.name} - {track.name}"))
+                if not args.dry_run:
+                    url = f"https://tidal.com/track/{track.id}"
+                    result = download_url(url, timeout=240)
+                    if result:
+                        downloaded += 1
+                        row["result"] = "downloaded"
+                        row["tidal_id"] = str(track.id)
+                        row["detail"] = track.name
+                        _save_progress()
+        except Exception as error:
+            # A single track's unexpected failure shouldn't take down an
+            # hours-long run — log it, count it, move on to the next one.
+            errors += 1
+            print(_grey(f"  error on {mp3_path.name}: {error}"))
 
         elapsed = time.monotonic() - start
         rate = elapsed / i
@@ -184,12 +201,11 @@ def main():
         tail = f"[{_format_elapsed(elapsed)}] @ {datetime.now():%H:%M:%S}"
         print(_grey(_right_align(body, tail)))
 
-    if not args.dry_run and downloaded:
-        with open(progress_path, "w", newline="", encoding="utf-8") as f:
-            writer = csv.DictWriter(f, fieldnames=fieldnames)
-            writer.writeheader()
-            writer.writerows(rows)
+    if not args.dry_run:
+        _save_progress()
 
+    if errors:
+        print(_grey(f"\n{errors} track(s) hit an unexpected error and were skipped"))
     print(
         f"\ndone: {matched} matched on retry ({downloaded} downloaded), "
         f"{still_unmatched} still unmatched"
