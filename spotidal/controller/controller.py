@@ -602,15 +602,19 @@ def _run_rym_harvest_or_report(run):
         return None, error
 
 
-def _log_rym_stats(stats):
+def _log_harvest_stats(stats, label="harvest"):
     print(t.log(
-        f"rym harvest done: {stats['filled']} filled, "
+        f"{label} done: {stats['filled']} filled, "
         f"{stats['skipped']} skipped, {stats['unmatched']} unmatched"
     ))
     stopped = stats["stopped"]
     if stopped is not None:
         print(t.warning(f"stopped early: {stopped}"))
     return stopped
+
+
+def _log_rym_stats(stats):
+    return _log_harvest_stats(stats, label="rym harvest")
 
 
 def run_harvest_cli(args):
@@ -658,14 +662,9 @@ def _run_discogs_harvest_cli(settings, scope, retry, max_calls):
         f" ({'authenticated' if filler.client.authenticated else 'anonymous'})"
     ))
     stats = filler.harvest(rows, retry_unmatched=retry)
-    print(t.log(
-        f"harvest done: {stats['filled']} filled, {stats['skipped']} skipped, "
-        f"{stats['unmatched']} unmatched"
-    ))
-    stopped = stats["stopped"]
+    stopped = _log_harvest_stats(stats)
     if stopped is None:
         return 0
-    print(t.warning(f"stopped early: {stopped}"))
     return 3 if isinstance(stopped, BudgetExhausted) else 2
 
 
