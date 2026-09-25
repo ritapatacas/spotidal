@@ -317,7 +317,7 @@ class Download:
             f"{playlist_label} ({display_total} tracks, {total} to download) - "
             f"playlist {playlist_number}/{playlist_total}"
         )
-        tqdm.write("\n\n\n\n" + header, file=sys.stdout)
+        tqdm.write("\n" + header, file=sys.stdout)
         batches = [
             tracks[start:start + self.batch_size]
             for start in range(0, total, self.batch_size)

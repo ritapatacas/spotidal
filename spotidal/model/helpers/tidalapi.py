@@ -119,6 +119,7 @@ async def _get_all_chunks(url, session, parser, params={}, show_progress=True) -
                 *chunk_requests,
                 desc=t.busy("fetching additional data chunks"),
                 ncols=70,
+                leave=False,
                 bar_format=(
                     f"{progress_color}{{desc}}: {{percentage:3.0f}}%|"
                     "{bar:20}| {n_fmt}/{total_fmt}"
