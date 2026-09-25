@@ -58,6 +58,10 @@ class Controller:
         for account in log.splitlines():
             print(t.busy(account))
 
+    def _select_menu(self, playlists):
+        preselected = self.model.current_selection or set(self.playlists.load())
+        return view.select_menu(playlists, preselected)
+
     def _run_task(self, func, *args, **kwargs):
         started = time.monotonic()
         result = func(*args, **kwargs)
@@ -127,8 +131,7 @@ class Controller:
                         self.model.current_selection.add(selected)
 
                     elif action == SelectionModeMenu.SELECT[0]:
-                        preselected = self.model.current_selection or set(self.playlists.load())
-                        result = view.select_menu(self.playlists.names(), preselected)
+                        result = self._select_menu(self.playlists.names())
                         if result is None:
                             continue
                         self.model.current_selection = set(result)
@@ -325,8 +328,7 @@ class Controller:
         })
 
     def _audit_consistency(self):
-        preselected = self.model.current_selection or set(self.playlists.load())
-        names = view.select_menu(self.app.playlist_names(), preselected)
+        names = self._select_menu(self.app.playlist_names())
         if names:
             self._run_task(self.app.audit_playlist_consistency, names)
 
@@ -414,8 +416,7 @@ class Controller:
                     continue
                 self._fill_genres_for_playlists(names)
             elif action == UtilsMenu.FILL_SELECT_PLAYLISTS:
-                preselected = self.model.current_selection or set(self.playlists.load())
-                names = view.select_menu(self.app.playlist_names(), preselected)
+                names = self._select_menu(self.app.playlist_names())
                 if names:
                     self._fill_genres_for_playlists(names)
 
@@ -443,8 +444,7 @@ class Controller:
             elif action == UtilsMenu.FILL_ALL:
                 self._harvest_rym_scope("all")
             elif action == UtilsMenu.FILL_SELECT_PLAYLISTS:
-                preselected = self.model.current_selection or set(self.playlists.load())
-                names = view.select_menu(self.app.playlist_names(), preselected)
+                names = self._select_menu(self.app.playlist_names())
                 if names:
                     self._harvest_rym_scope(names)
 
