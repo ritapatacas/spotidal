@@ -26,6 +26,9 @@ from spotidal.view.prompt import (
 warnings.filterwarnings(
     "ignore", category=DeprecationWarning, module=r"spotipy\.client"
 )
+warnings.filterwarnings(
+    "ignore", category=DeprecationWarning, module=r"tidalapi\.session"
+)
 
 
 class Controller:
