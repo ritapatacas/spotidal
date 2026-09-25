@@ -45,7 +45,7 @@ PAGE = """<!doctype html>
   tr:hover { background: #f5f5f5; }
   tr.resolved { color: #999; }
   tr.selected { background: #dbeafe; }
-  .candidate { border: 1px solid #ddd; border-radius: 6px; padding: 10px; margin-bottom: 8px; cursor: pointer; }
+  .candidate { border: 1px solid #ddd; border-radius: 6px; padding: 10px; margin-bottom: 8px; cursor: pointer; display: flex; align-items: center; }
   .candidate:hover { background: #f0f9ff; }
   .candidate.picked { background: #d1fae5; border-color: #10b981; }
   h3 { margin-top: 0; }
@@ -84,17 +84,34 @@ function render() {
   });
 }
 
-async function selectRow(i) {
+function selectRow(i) {
   currentIndex = i;
   render();
-  const right = document.getElementById('right');
-  right.innerHTML = '<p class="muted">a pesquisar...</p>';
-  const res = await fetch('/api/search?index=' + i);
-  const candidates = await res.json();
   const row = rows[i];
-  right.innerHTML = `<h3>${row.artist} - ${row.title}</h3><p class="muted">${row.album || ''}</p>`;
+  runSearch(i, `${row.title} ${row.artist}`);
+}
+
+async function runSearch(i, query) {
+  const right = document.getElementById('right');
+  const row = rows[i];
+  right.innerHTML = `
+    <h3>${row.artist} - ${row.title}</h3>
+    <p class="muted">${row.album || ''}</p>
+    <div id="searchbox">
+      <input id="q" type="text" value="${query.replace(/"/g, '&quot;')}" style="width:70%">
+      <button id="go">pesquisar</button>
+    </div>
+    <div id="candidates"><p class="muted">a pesquisar...</p></div>
+  `;
+  document.getElementById('go').onclick = () => runSearch(i, document.getElementById('q').value);
+  document.getElementById('q').onkeydown = (e) => { if (e.key === 'Enter') runSearch(i, e.target.value); };
+
+  const res = await fetch('/api/search?index=' + i + '&q=' + encodeURIComponent(query));
+  const candidates = await res.json();
+  const box = document.getElementById('candidates');
+  box.innerHTML = '';
   if (!candidates.length) {
-    right.innerHTML += '<p class="muted">sem resultados no TIDAL</p>';
+    box.innerHTML = '<p class="muted">sem resultados no TIDAL</p>';
     return;
   }
   candidates.forEach(c => {
@@ -102,9 +119,12 @@ async function selectRow(i) {
     div.className = 'candidate';
     const mins = Math.floor(c.duration / 60);
     const secs = String(c.duration % 60).padStart(2, '0');
-    div.innerHTML = `<b>${c.artist}</b> - ${c.name}<br><span class="muted">${c.album || ''} [${mins}:${secs}]</span>`;
+    const cover = c.cover
+      ? `<img src="${c.cover}" width="56" height="56" style="border-radius:4px;margin-right:10px;vertical-align:middle">`
+      : `<div style="width:56px;height:56px;background:#eee;border-radius:4px;display:inline-block;margin-right:10px;vertical-align:middle"></div>`;
+    div.innerHTML = `${cover}<span style="vertical-align:middle"><b>${c.artist}</b> - ${c.name}<br><span class="muted">${c.album || ''} [${mins}:${secs}]</span></span>`;
     div.onclick = () => pick(i, c, div);
-    right.appendChild(div);
+    box.appendChild(div);
   });
 }
 
@@ -125,6 +145,13 @@ loadRows();
 </body>
 </html>
 """
+
+
+def _cover_url(track):
+    try:
+        return track.album.image(160) if track.album else None
+    except Exception:
+        return None
 
 
 def load_source_rows():
@@ -188,9 +215,10 @@ class Handler(BaseHTTPRequestHandler):
             ]
             self._send_json(payload)
         elif parsed.path == "/api/search":
-            index = int(parse_qs(parsed.query)["index"][0])
+            params = parse_qs(parsed.query)
+            index = int(params["index"][0])
             row = self.source_rows[index]
-            query = f"{row['title']} {row['artist']}"
+            query = params.get("q", [f"{row['title']} {row['artist']}"])[0]
             results = self.td_session.search(query, models=[tidalapi.media.Track])
             candidates = [
                 {
@@ -199,6 +227,7 @@ class Handler(BaseHTTPRequestHandler):
                     "name": t.name,
                     "album": t.album.name if t.album else None,
                     "duration": t.duration,
+                    "cover": _cover_url(t),
                 }
                 for t in results.get("tracks", [])[:5]
             ]
