@@ -10,6 +10,10 @@ def _ask(questions, **kwargs):
 
 
 BACK_KEYBINDINGS = {"skip": [{"key": "escape"}]}
+CONFIRM_KEYBINDINGS = {
+    "confirm": [{"key": "y"}, {"key": "Y"}, {"key": "1"}],
+    "reject": [{"key": "n"}, {"key": "N"}, {"key": "0"}],
+}
 
 
 class Submenu:
@@ -58,10 +62,7 @@ class Prompt(Enum):
     SEARCH = "fuzzy"
     CONFIRM = "confirm"
 
-    kb_confirm = {
-        "confirm": [{"key": "y"}, {"key": "Y"}, {"key": "1"}],
-        "reject": [{"key": "n"}, {"key": "N"}, {"key": "0"}],
-    }
+    kb_confirm = CONFIRM_KEYBINDINGS
     INPUT = "input"
     EXPAND = "expand"
 
@@ -508,11 +509,7 @@ class SaveSelectionMenu(MenuBase):
                 "message": self.SAVE_SELECTION_Q,
                 "default": True,
                 "mandatory": False,
-                "keybindings": {
-                    **BACK_KEYBINDINGS,
-                    "confirm": [{"key": "y"}, {"key": "Y"}, {"key": "1"}],
-                    "reject": [{"key": "n"}, {"key": "N"}, {"key": "0"}],
-                },
+                "keybindings": {**BACK_KEYBINDINGS, **CONFIRM_KEYBINDINGS},
             }
         ]
         response = _ask(questions)
