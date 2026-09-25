@@ -22,7 +22,7 @@ def _remove_indices_from_playlist(playlist: tidalapi.UserPlaylist, indices: List
     )
     playlist._reparse()
 
-def clear_td_playlist(playlist: tidalapi.UserPlaylist, chunk_size: int = 20):
+def clear_td_playlist(playlist: tidalapi.UserPlaylist, chunk_size: int = 20, max_retries: int = 10):
     if not playlist._etag:
         playlist._reparse()
     with tqdm(
@@ -30,20 +30,30 @@ def clear_td_playlist(playlist: tidalapi.UserPlaylist, chunk_size: int = 20):
     ) as progress:
         while playlist.num_tracks:
             before = playlist.num_tracks
-            indices = range(min(playlist.num_tracks, chunk_size))
-            try:
-                _remove_indices_from_playlist(playlist, indices)
-            except Exception as error:
-                if getattr(getattr(error, "response", None), "status_code", None) != 412:
-                    raise
-                # a stale etag can mean the delete partially landed server-side,
-                # so recompute indices against the refreshed track count
-                playlist._reparse()
-                if not playlist.num_tracks:
-                    progress.update(before - playlist.num_tracks)
-                    continue
+            # A stale etag (412) can mean a previous delete partially landed
+            # server-side, or that something else touched the playlist
+            # concurrently — either way, re-fetch the current track count and
+            # try again rather than giving up after one retry. A single
+            # unhandled 412 here used to propagate all the way up and crash
+            # the whole app mid-erase, potentially leaving the real TIDAL
+            # playlist with only some tracks removed and nothing re-added.
+            for attempt in range(max_retries):
                 indices = range(min(playlist.num_tracks, chunk_size))
-                _remove_indices_from_playlist(playlist, indices)
+                try:
+                    _remove_indices_from_playlist(playlist, indices)
+                    break
+                except Exception as error:
+                    if getattr(getattr(error, "response", None), "status_code", None) != 412:
+                        raise
+                    playlist._reparse()
+                    if not playlist.num_tracks:
+                        break
+                    if attempt == max_retries - 1:
+                        raise RuntimeError(
+                            f"giving up clearing tidal playlist '{playlist.name}' "
+                            f"after {max_retries} consecutive 412s (etag kept going "
+                            "stale) — playlist may be left partially cleared"
+                        ) from error
             progress.update(before - playlist.num_tracks)
 
 def swap_track_in_playlist(playlist: tidalapi.UserPlaylist, old_track_id: int, new_track_id: int):

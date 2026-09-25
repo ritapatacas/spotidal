@@ -110,6 +110,17 @@ class ControllerMain:
         return self._startup_warnings
 
     def _playlist_info(self, reference):
+        # _playlist_info/get_parsed_playlists cross-references *live*
+        # Spotify playlists by name, which silently excludes private/
+        # collaborative playlists and mismatches on trailing whitespace or
+        # duplicate names — the exact same failure mode fixed for
+        # audit_playlist_consistency. Prefer the spotify_playlist_id
+        # already verified and stored in the local db; only fall back to
+        # the live lookup for playlists the db doesn't know about yet.
+        if isinstance(reference, str) and self._library:
+            sp_id = self._library.get_playlist_spotify_id(reference)
+            if sp_id:
+                return {"name": reference, "sp_id": sp_id, "td_id": None}
         info = playlist.get_info(reference)
         if info is None:
             self.model.get_parsed_playlists()
