@@ -56,7 +56,7 @@ PAGE = """<!doctype html>
 <body>
 <div id="left">
   <div id="status">a carregar...</div>
-  <table id="rows"><thead><tr><th>playlist</th><th>artista</th><th>titulo</th><th>album</th></tr></thead><tbody></tbody></table>
+  <table id="rows"><thead><tr><th></th><th>playlist</th><th>artista</th><th>titulo</th><th>album</th><th>duração</th></tr></thead><tbody></tbody></table>
 </div>
 <div id="right"><p class="muted">clica numa linha para pesquisar no TIDAL</p></div>
 
@@ -78,7 +78,13 @@ function render() {
   rows.forEach((r, i) => {
     const tr = document.createElement('tr');
     tr.className = (r.resolved ? 'resolved' : '') + (i === currentIndex ? ' selected' : '');
-    tr.innerHTML = `<td>${r.playlist}</td><td>${r.artist}</td><td>${r.title}</td><td>${r.album || ''}</td>`;
+    const cover = r.cover
+      ? `<img src="${r.cover}" width="32" height="32" style="border-radius:3px;display:block">`
+      : `<div style="width:32px;height:32px;background:#eee;border-radius:3px"></div>`;
+    const duration = r.duration
+      ? `${Math.floor(r.duration / 60)}:${String(r.duration % 60).padStart(2, '0')}`
+      : '';
+    tr.innerHTML = `<td>${cover}</td><td>${r.playlist}</td><td>${r.artist}</td><td>${r.title}</td><td>${r.album || ''}</td><td>${duration}</td>`;
     tr.onclick = () => selectRow(i);
     tbody.appendChild(tr);
   });
@@ -157,6 +163,27 @@ def _cover_url(track):
 def load_source_rows():
     with open(SOURCE_CSV, newline="", encoding="utf-8") as f:
         return list(csv.DictReader(f))
+
+
+def enrich_with_spotify_metadata(rows, sp_session):
+    ids = [r["spotify_id"] for r in rows if r["spotify_id"]]
+    info = {}
+    for i in range(0, len(ids), 50):
+        chunk = ids[i : i + 50]
+        result = sp_session.tracks(chunk)
+        for track in result["tracks"]:
+            if not track:
+                continue
+            images = track["album"]["images"]
+            cover = images[-1]["url"] if images else None
+            info[track["id"]] = {
+                "duration": round(track["duration_ms"] / 1000),
+                "cover": cover,
+            }
+    for row in rows:
+        extra = info.get(row["spotify_id"], {})
+        row["duration"] = extra.get("duration")
+        row["cover"] = extra.get("cover")
 
 
 def load_resolved_spotify_ids():
@@ -253,6 +280,11 @@ class Handler(BaseHTTPRequestHandler):
 def main():
     Handler.source_rows = load_source_rows()
     print(f"{len(Handler.source_rows)} tracks loaded from {SOURCE_CSV}")
+
+    sp_session = auth.open_sp_session()
+    if sp_session:
+        print("fetching cover art + duration from Spotify...")
+        enrich_with_spotify_metadata(Handler.source_rows, sp_session)
 
     Handler.td_session = auth.get_td_session()
     if not Handler.td_session:
