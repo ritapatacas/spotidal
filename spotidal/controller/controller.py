@@ -198,7 +198,7 @@ class Controller:
     def _download_settings(self):
         while True:
             action = view.download_settings_menu()
-            if action in (None, "back"):
+            if self._is_back(action):
                 return
             if action == "download directory":
                 self.app.change_download_dir()
@@ -212,7 +212,7 @@ class Controller:
     def _default_selection(self):
         while True:
             action = view.default_selection_menu()
-            if action in (None, "back"):
+            if self._is_back(action):
                 return
             if action == "view selection":
                 selection = self.playlists.load()
@@ -270,21 +270,13 @@ class Controller:
         print(t.display_selection_table(stats))
 
     def _utils_menu(self):
-        submenu = view.Submenu(UtilsMenu.UTILS_Q, UtilsMenu.UTILS_OPT)
-        while True:
-            action = submenu.display()
-            if action is None:
-                return
-            if action == UtilsMenu.PLAYLISTS:
-                self._utils_playlists()
-            elif action == UtilsMenu.DOWNLOAD:
-                self._utils_download()
-            elif action == UtilsMenu.LOCAL_FILES:
-                self._utils_local_files()
-            elif action == UtilsMenu.DATABASE:
-                self._utils_database()
-            elif action == UtilsMenu.GENRES:
-                self._utils_genres()
+        self._run_submenu(UtilsMenu.UTILS_Q, UtilsMenu.UTILS_OPT, {
+            UtilsMenu.PLAYLISTS: self._utils_playlists,
+            UtilsMenu.DOWNLOAD: self._utils_download,
+            UtilsMenu.LOCAL_FILES: self._utils_local_files,
+            UtilsMenu.DATABASE: self._utils_database,
+            UtilsMenu.GENRES: self._utils_genres,
+        })
 
     def _run_submenu(self, title, options, handlers):
         submenu = view.Submenu(title, options)
@@ -295,6 +287,10 @@ class Controller:
             handler = handlers.get(action)
             if handler:
                 handler()
+
+    @staticmethod
+    def _is_back(action):
+        return action in (None, "back")
 
     def _utils_playlists(self):
         self._run_submenu(UtilsMenu.PLAYLISTS, UtilsMenu.PLAYLISTS_OPT, {
@@ -363,23 +359,19 @@ class Controller:
             print(t.log(f"{name} ({count} track(s))"))
 
     def _view_genre_styles(self):
-        styles_menu = view.Submenu(
-            UtilsMenu.VIEW_GENRE_STYLES, UtilsMenu.VIEW_STYLES_OPT
-        )
-        while True:
-            action = styles_menu.display()
-            if action is None:
-                return
-            if action == UtilsMenu.ALL_GENRES:
-                self._print_genre_styles()
-            elif action == UtilsMenu.SELECT_GENRE:
-                genres = [row[0] for row in self.app.final_genres()]
-                if not genres:
-                    print(t.log("no genres defined"))
-                    continue
-                genre = view.ListMenu("select genre", genres).display()
-                if genre:
-                    self._print_genre_styles(genre)
+        self._run_submenu(UtilsMenu.VIEW_GENRE_STYLES, UtilsMenu.VIEW_STYLES_OPT, {
+            UtilsMenu.ALL_GENRES: self._print_genre_styles,
+            UtilsMenu.SELECT_GENRE: self._print_genre_styles_for_selected_genre,
+        })
+
+    def _print_genre_styles_for_selected_genre(self):
+        genres = [row[0] for row in self.app.final_genres()]
+        if not genres:
+            print(t.log("no genres defined"))
+            return
+        genre = view.ListMenu("select genre", genres).display()
+        if genre:
+            self._print_genre_styles(genre)
 
     def _print_genre_styles(self, genre_name=None):
         rows = self.app.final_genre_styles(genre_name)
@@ -405,23 +397,22 @@ class Controller:
                 print(t.log(f"style '{style.strip()}' added"))
 
     def _fill_genres_scoped(self):
-        fill_menu = view.Submenu(
-            UtilsMenu.FILL_GENRES, UtilsMenu.FILL_GENRES_OPT
-        )
-        while True:
-            action = fill_menu.display()
-            if action is None:
-                return
-            if action == UtilsMenu.FILL_SELECTED:
-                names = self.playlists.load()
-                if not names:
-                    print(t.warning("no default selection; use 'select playlists'"))
-                    continue
-                self._fill_genres_for_playlists(names)
-            elif action == UtilsMenu.FILL_SELECT_PLAYLISTS:
-                names = self._select_menu(self.app.playlist_names())
-                if names:
-                    self._fill_genres_for_playlists(names)
+        self._run_submenu(UtilsMenu.FILL_GENRES, UtilsMenu.FILL_GENRES_OPT, {
+            UtilsMenu.FILL_SELECTED: self._fill_genres_for_default_selection,
+            UtilsMenu.FILL_SELECT_PLAYLISTS: self._fill_genres_for_chosen_playlists,
+        })
+
+    def _fill_genres_for_default_selection(self):
+        names = self.playlists.load()
+        if not names:
+            print(t.warning("no default selection; use 'select playlists'"))
+            return
+        self._fill_genres_for_playlists(names)
+
+    def _fill_genres_for_chosen_playlists(self):
+        names = self._select_menu(self.app.playlist_names())
+        if names:
+            self._fill_genres_for_playlists(names)
 
     def _fill_genres_for_playlists(self, names):
         track_ids = self.app.track_ids_for_playlists(names)
@@ -437,19 +428,16 @@ class Controller:
         self._run_task(self.app.fill_genres, track_ids)
 
     def _harvest_rym_scoped(self):
-        submenu = view.Submenu(UtilsMenu.FILL_GENRES_RYM, UtilsMenu.FILL_RYM_OPT)
-        while True:
-            action = submenu.display()
-            if action is None:
-                return
-            if action == UtilsMenu.FILL_SELECTED:
-                self._harvest_rym_scope("selection")
-            elif action == UtilsMenu.FILL_ALL:
-                self._harvest_rym_scope("all")
-            elif action == UtilsMenu.FILL_SELECT_PLAYLISTS:
-                names = self._select_menu(self.app.playlist_names())
-                if names:
-                    self._harvest_rym_scope(names)
+        self._run_submenu(UtilsMenu.FILL_GENRES_RYM, UtilsMenu.FILL_RYM_OPT, {
+            UtilsMenu.FILL_SELECTED: lambda: self._harvest_rym_scope("selection"),
+            UtilsMenu.FILL_ALL: lambda: self._harvest_rym_scope("all"),
+            UtilsMenu.FILL_SELECT_PLAYLISTS: self._harvest_rym_scope_chosen_playlists,
+        })
+
+    def _harvest_rym_scope_chosen_playlists(self):
+        names = self._select_menu(self.app.playlist_names())
+        if names:
+            self._harvest_rym_scope(names)
 
     def _harvest_rym_scope(self, scope):
         from spotidal.model.settings import Settings
@@ -491,7 +479,7 @@ class Controller:
     def _notifications_settings(self):
         while True:
             action = view.notifications_settings_menu()
-            if action in (None, "back"):
+            if self._is_back(action):
                 return
             if action == "notification sound delay (minutes)":
                 value = view.notification_delay_menu(self.app.get_notify_sound_delay())
@@ -512,14 +500,14 @@ class Controller:
     def _database_settings(self):
         while True:
             action = view.database_settings_menu()
-            if action in (None, "back"):
+            if self._is_back(action):
                 return
             self.app.change_database_option(action)
 
     def _tidekeeper_settings(self):
         while True:
             action = view.tidekeeper_settings_menu()
-            if action in (None, "back"):
+            if self._is_back(action):
                 return
             print(t.log(f"Tidekeeper setting '{action}' will be implemented later"))
 
