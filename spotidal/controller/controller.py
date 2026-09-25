@@ -65,6 +65,14 @@ class Controller:
         preselected = self.model.current_selection or set(self.playlists.load())
         return view.select_menu(playlists, preselected)
 
+    def _prompt_url_and(self, on_url):
+        url = view.url_menu()
+        if url:
+            try:
+                on_url(url)
+            except ValueError as error:
+                print(t.error(str(error)))
+
     def _run_task(self, func, *args, **kwargs):
         started = time.monotonic()
         result = func(*args, **kwargs)
@@ -152,15 +160,11 @@ class Controller:
                         self.model.current_selection = selection
 
                     elif action == SelectionModeMenu.URL:
-                        url = view.url_menu()
-                        if url:
-                            try:
-                                if menu == MainMenu.DOWNLOAD[0]:
-                                    self._run_task(self.app.download_url, url)
-                                else:
-                                    self._run_task(self.app.sync_url, url)
-                            except ValueError as error:
-                                print(t.error(str(error)))
+                        self._prompt_url_and(lambda url: self._run_task(
+                            self.app.download_url if menu == MainMenu.DOWNLOAD[0]
+                            else self.app.sync_url,
+                            url,
+                        ))
                         continue
 
                     elif action == SelectionModeMenu.BACK[0]:
@@ -255,13 +259,11 @@ class Controller:
             elif action == SelectionModeMenu.LOAD:
                 selection |= set(self.playlists.load())
             elif action == SelectionModeMenu.URL:
-                url = view.url_menu()
-                if url:
-                    try:
-                        name = self.app.resolve_playlist_name_from_url(url)
-                        selection.add(name)
-                    except ValueError as error:
-                        print(t.error(str(error)))
+                self._prompt_url_and(
+                    lambda url: selection.add(
+                        self.app.resolve_playlist_name_from_url(url)
+                    )
+                )
             if not selection:
                 continue
             if view.confirm_selection_menu():
