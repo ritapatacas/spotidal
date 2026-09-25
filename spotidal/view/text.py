@@ -1,5 +1,8 @@
+import re
 import shutil
 from enum import Enum
+
+_ANSI_RE = re.compile(r"\033\[[0-9;]*m")
 
 
 class Colors(Enum):
@@ -65,15 +68,26 @@ class Text:
         """Pad `body` with spaces so `tail` lands flush with the terminal's
         right edge, recalculated from the current window width each call
         (rather than a fixed guessed column) so it stays aligned if the
-        terminal gets resized.
+        terminal gets resized. Measures visible width (ANSI color codes
+        already embedded in `body`/`tail` don't count), so this works
+        whether the caller colors the whole line afterwards or colors
+        pieces of it inline.
 
         `prefix_len` accounts for characters a caller will still prepend
         after this returns (e.g. the "_" a report.info()/log_grey() call
         adds, or the "! " a warning()/error() call adds) — without it the
         line ends up that many columns too wide."""
         columns = shutil.get_terminal_size(fallback=(100, 24)).columns
-        pad = max(min_pad, columns - prefix_len - len(body) - len(tail))
+        visible_body = len(_ANSI_RE.sub("", body))
+        visible_tail = len(_ANSI_RE.sub("", tail))
+        pad = max(min_pad, columns - prefix_len - visible_body - visible_tail)
         return f"{body}{' ' * pad}{tail}"
+
+    @staticmethod
+    def format_elapsed(seconds):
+        minutes, secs = divmod(int(seconds), 60)
+        hours, minutes = divmod(minutes, 60)
+        return f"{hours}:{minutes:02d}:{secs:02d}" if hours else f"{minutes:02d}:{secs:02d}"
 
     @staticmethod
     def display_selection(selection):

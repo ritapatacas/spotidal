@@ -1,6 +1,7 @@
 import asyncio
 import sys
 import time
+from datetime import datetime
 from urllib.parse import urlparse
 
 import tidalapi
@@ -137,6 +138,7 @@ class Download:
 
     def by_td_ids(self, td_ids):
         self._reset_download_settings()
+        job_start = time.monotonic()
         playlists = []
         for td_id in tqdm(
             td_ids, desc=t.busy("fetching playlists"), unit="playlist"
@@ -172,6 +174,7 @@ class Download:
                 "total_tracks": total_tracks,
                 "skipped_total": skipped_total,
                 "pending_total": pending_total,
+                "start": job_start,
             }
             for playlist_number, (playlist, tracks, total, skipped) in enumerate(playlists, 1):
                 self._download_tidal_playlist(
@@ -303,20 +306,31 @@ class Download:
         progress.set_description(t.busy("downloading:"), refresh=False)
         header = ""
         if overall and playlist_total > 1:
+            elapsed = time.monotonic() - overall["start"]
+            tail = f"[{t.format_elapsed(elapsed)}] @ {datetime.now():%H:%M:%S}"
+
             downloaded_so_far = getattr(progress, "downloaded_count", 0)
             already_available = overall["skipped_total"] + downloaded_so_far
             still_to_download = overall["pending_total"] - downloaded_so_far
-            header += t.busy("downloaded playlists: ") + (
+            summary_line = t.busy("downloaded playlists: ") + (
                 f"{playlist_number - 1}/{playlist_total} playlists - "
                 f"{overall['total_tracks']} tracks "
             ) + t.grey(
                 f"({already_available} already available, "
                 f"{still_to_download} to download)"
-            ) + "\n"
-        header += t.busy(
-            f"{playlist_label} ({display_total} tracks, {total} to download) - "
-            f"playlist {playlist_number}/{playlist_total}"
-        )
+            )
+            header += t.right_align(summary_line, tail) + "\n"
+
+            name_line = t.busy(
+                f"{playlist_label} ({display_total} tracks, {total} to download) - "
+                f"playlist {playlist_number}/{playlist_total}"
+            )
+            header += t.right_align(name_line, tail)
+        else:
+            header += t.busy(
+                f"{playlist_label} ({display_total} tracks, {total} to download) - "
+                f"playlist {playlist_number}/{playlist_total}"
+            )
         tqdm.write("\n" + header, file=sys.stdout)
         batches = [
             tracks[start:start + self.batch_size]
