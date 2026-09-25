@@ -288,13 +288,7 @@ class ControllerMain:
         ).convert()
 
     def reconcile_library(self):
-        if not self._settings.get_database_enabled():
-            print(t.error("database is disabled"))
-            return
-        if not self._library:
-            self._require_local_directory(
-                self._settings.get_database_path(), "Database settings"
-            )
+        if not self._require_database_and_library():
             return
         with tqdm(desc=t.busy("scanning local files"), unit="file") as progress:
             changes = self._library.reconcile_all(on_progress=progress.update)
@@ -629,26 +623,23 @@ class ControllerMain:
         return self._doctor.run_all()
 
     def fill_genres(self, track_ids=None):
-        if not self._settings.get_database_enabled():
-            print(t.error("database is disabled"))
-            return
-        if not self._library:
-            self._require_local_directory(
-                self._settings.get_database_path(), "Database settings"
-            )
+        if not self._require_database_and_library():
             return
         GenreFiller(self._library).run(track_ids=track_ids)
 
-    def _require_genre_library(self):
+    def _require_database_and_library(self):
         if not self._settings.get_database_enabled():
             print(t.error("database is disabled"))
-            return None
+            return False
         if not self._library:
             self._require_local_directory(
                 self._settings.get_database_path(), "Database settings"
             )
-            return None
-        return self._library
+            return False
+        return True
+
+    def _require_genre_library(self):
+        return self._library if self._require_database_and_library() else None
 
     def final_genres(self):
         library = self._require_genre_library()
@@ -685,13 +676,7 @@ class ControllerMain:
         return library.track_ids_for_playlists(names) if library else []
 
     def export_rekordbox(self):
-        if not self._settings.get_database_enabled():
-            print(t.error("database is disabled"))
-            return
-        if not self._library:
-            self._require_local_directory(
-                self._settings.get_database_path(), "Database settings"
-            )
+        if not self._require_database_and_library():
             return
         export = RekordboxExport(
             self._library.database_path, self._library.root_path
@@ -715,13 +700,7 @@ class ControllerMain:
         return {"m3u8": len(playlists["written"]), **xml}
 
     def import_rekordbox_metadata(self):
-        if not self._settings.get_database_enabled():
-            print(t.error("database is disabled"))
-            return
-        if not self._library:
-            self._require_local_directory(
-                self._settings.get_database_path(), "Database settings"
-            )
+        if not self._require_database_and_library():
             return
         try:
             source = RekordboxImport()
@@ -736,13 +715,7 @@ class ControllerMain:
         return result
 
     def run_search_ui(self):
-        if not self._settings.get_database_enabled():
-            print(t.error("database is disabled"))
-            return
-        if not self._library:
-            self._require_local_directory(
-                self._settings.get_database_path(), "Database settings"
-            )
+        if not self._require_database_and_library():
             return
         run_search_server(self._library)
 
