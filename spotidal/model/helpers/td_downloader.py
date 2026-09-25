@@ -358,7 +358,7 @@ def _report_downloads(output, download_path, previous_files):
                 if not ACCESS_TOKEN_LOGGED:
                     message = line.split("] ", 1)[-1].replace("AccessToken", "access token")
                     message = _format_access_token_message(message)
-                    tqdm.write("\n" + t.busy(message + "\n"))
+                    tqdm.write(t.busy(message))
                     ACCESS_TOKEN_LOGGED = True
         elif "[ERR]" in line:
             tqdm.write(t.error(line.split("] ", 1)[-1]))

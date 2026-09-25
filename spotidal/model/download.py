@@ -111,7 +111,10 @@ class Download:
             settings.get("downloadPath", "~/Spotidal"),
             settings.get("databaseLocation"),
         )
-        library.reconcile_all()
+        with tqdm(
+            desc=t.busy("reconciling local library"), unit="file", file=sys.stdout
+        ) as progress:
+            library.reconcile_all(on_progress=progress.update)
 
     def by_td_id(self, td_id):
         self._reset_download_settings()
@@ -378,7 +381,7 @@ class Download:
                         track_progress = 1.0
                         progress.clear()
                         tqdm.write(
-                            t.error(f"failed to download '{track.name}'") + "\n",
+                            t.error(f"failed to download '{track.name}'"),
                             file=sys.stdout,
                         )
                     elif result[1] or result[2]:
@@ -399,12 +402,12 @@ class Download:
                                 f"downloaded {t.grey(title)} "
                                 f"({progress.downloaded_count}/{progress.download_total} - "
                                 f"{percentage:.0f}%)"
-                            ) + "\n", file=sys.stdout)
+                            ), file=sys.stdout)
                         else:
                             linked_existing = len(result) > 3 and result[3]
                             suffix = " " + t.grey("(linked database ids)") if linked_existing else ""
                             tqdm.write(
-                                t.busy(" skipped ") + t.grey(track.name) + suffix + "\n",
+                                t.busy(" skipped ") + t.grey(track.name) + suffix,
                                 file=sys.stdout,
                             )
                 except Exception as error:
@@ -414,7 +417,7 @@ class Download:
                         progress.update(-track_progress)
                     errors += 1
                     tqdm.write(
-                        t.error(f"failed to download '{track.name}': {error}") + "\n",
+                        t.error(f"failed to download '{track.name}': {error}"),
                         file=sys.stdout,
                     )
             return downloaded, errors, processed
