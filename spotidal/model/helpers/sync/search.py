@@ -10,10 +10,12 @@ from ..type.file import Files
 from ....view.text import Text as t
 
 from ..sync import match as _match
+from ..sync import musicbrainz as _musicbrainz
 from . import cache as _cache
 from . import request_utils as _req
 
 _NOT_FOUND_TRACKS = []
+_ORIGINAL_ALBUM_CHOICES = []
 
 
 def pop_not_found_tracks():
@@ -21,11 +23,38 @@ def pop_not_found_tracks():
     _NOT_FOUND_TRACKS.clear()
     return tracks
 
+
+def pop_original_album_choices():
+    """Tracks where the Spotify-reported album differs from the track's
+    genuine original studio album (per MusicBrainz), and TIDAL has both as
+    distinct options — deferred rather than decided silently. Each entry:
+    {"sp_track", "playlist_name", "spotify_track", "original_track",
+    "original_album_name"}."""
+    choices = list(_ORIGINAL_ALBUM_CHOICES)
+    _ORIGINAL_ALBUM_CHOICES.clear()
+    return choices
+
+
 async def td_search(
-    sp_track, rate_limiter, td_session: tidalapi.Session
+    sp_track, rate_limiter, td_session: tidalapi.Session, playlist_name: str = ""
 ) -> tidalapi.Track | None:
-    def _search_for_track_in_album():
-        # search for album name and first album artist
+    def _search_for_track_in_album(album_name, album_artist, match_fn=_match.match):
+        # search a specific album by name (not necessarily sp_track's own
+        # reported album — see the MusicBrainz-original-album path below)
+        # for the track matching sp_track, by title rather than position:
+        # track_number is only meaningful relative to sp_track's own album.
+        query = _match.simple(album_name) + " " + _match.simple(album_artist)
+        album_result = td_session.search(query, models=[tidalapi.album.Album])
+        fake_sp_album = {"name": album_name, "artists": [{"name": album_artist}]}
+        for album in album_result["albums"]:
+            if not _match.test_album_similarity(fake_sp_album, album):
+                continue
+            for track in album.tracks():
+                if match_fn(track, sp_track):
+                    return track
+
+    def _search_for_track_in_sp_album(match_fn=_match.match):
+        # search for sp_track's own reported album name and first album artist
         if (
             "album" in sp_track
             and "artists" in sp_track["album"]
@@ -48,11 +77,10 @@ async def td_search(
                         )  # incorrect metadata :(
                         continue
                     track = album_tracks[sp_track["track_number"] - 1]
-                    if _match.match(track, sp_track):
-                        failure_cache.remove_match_failure(sp_track["id"])
+                    if match_fn(track, sp_track):
                         return track
 
-    def _search_for_standalone_track():
+    def _search_for_standalone_track(match_fn=_match.match):
         # if album search fails then search for track name and first artist
         query = (
             _match.simple(sp_track["name"])
@@ -62,21 +90,75 @@ async def td_search(
         for track in td_session.search(query, models=[tidalapi.media.Track])[
             "tracks"
         ]:
-            if _match.match(track, sp_track):
-                failure_cache.remove_match_failure(sp_track["id"])
+            if match_fn(track, sp_track):
                 return track
 
-    await rate_limiter.acquire()
-    album_search = await asyncio.to_thread(_search_for_track_in_album)
-    if album_search:
-        return album_search
-    await rate_limiter.acquire()
-    track_search = await asyncio.to_thread(_search_for_standalone_track)
-    if track_search:
-        return track_search
+    def _musicbrainz_original_album_name():
+        isrc = sp_track.get("external_ids", {}).get("isrc")
+        return _musicbrainz.original_album_name(isrc)
 
-    # if none of the search modes succeeded then store the track id to the failure cache
-    failure_cache.cache_match_failure(sp_track["id"])
+    # Ask MusicBrainz up front whether sp_track's own reported album is
+    # actually the original studio release, or a compilation/reissue —
+    # Spotify (and TIDAL) both serve compilation copies of well-known
+    # tracks constantly, so this can't be told from the Spotify data alone.
+    original_album_name = await asyncio.to_thread(_musicbrainz_original_album_name)
+    sp_album_name = sp_track.get("album", {}).get("name")
+    needs_choice = bool(
+        original_album_name and sp_album_name
+        and _match.simple(original_album_name).lower() != _match.simple(sp_album_name).lower()
+    )
+
+    # Plan A/B: strict match (ISRC, or exact duration+name+artist) against
+    # sp_track's own reported album, then a standalone track search. Plan
+    # C/D: same order, but with a looser match (wider duration tolerance,
+    # and an artist splitter that also recognizes "feat."/"×"/"and" as
+    # separators) — a manual spot check found this recovers a large share
+    # of tracks the strict pass rejects only over text-formatting
+    # differences, not because the matching TIDAL track doesn't exist.
+    spotify_result = None
+    for match_fn in (_match.match, _match.loose_match):
+        await rate_limiter.acquire()
+        album_search = await asyncio.to_thread(_search_for_track_in_sp_album, match_fn)
+        if album_search:
+            spotify_result = album_search
+            break
+        await rate_limiter.acquire()
+        track_search = await asyncio.to_thread(_search_for_standalone_track, match_fn)
+        if track_search:
+            spotify_result = track_search
+            break
+
+    if not needs_choice:
+        if spotify_result:
+            failure_cache.remove_match_failure(sp_track["id"])
+        else:
+            failure_cache.cache_match_failure(sp_track["id"])
+        return spotify_result
+
+    await rate_limiter.acquire()
+    original_result = await asyncio.to_thread(
+        _search_for_track_in_album, original_album_name, sp_track["artists"][0]["name"]
+    )
+
+    if original_result and spotify_result and original_result.id != spotify_result.id:
+        # Both exist as distinct TIDAL tracks — don't silently pick one;
+        # defer to the end-of-job review (see search.pop_original_album_choices).
+        _ORIGINAL_ALBUM_CHOICES.append({
+            "sp_track": sp_track,
+            "playlist_name": playlist_name,
+            "spotify_track": spotify_result,
+            "original_track": original_result,
+            "original_album_name": original_album_name,
+        })
+        failure_cache.remove_match_failure(sp_track["id"])
+        return spotify_result  # default until/unless the review swaps it
+
+    result = original_result or spotify_result
+    if result:
+        failure_cache.remove_match_failure(sp_track["id"])
+    else:
+        failure_cache.cache_match_failure(sp_track["id"])
+    return result
 
 async def search_new_tracks_on_td(
     td_session: tidalapi.Session,
@@ -117,7 +199,7 @@ async def search_new_tracks_on_td(
     search_results = await atqdm.gather(
         *[
             _req.repeat_on_request_error(
-                td_search, t, semaphore, td_session
+                td_search, t, semaphore, td_session, playlist_name
             )
             for t in tracks_to_search
         ],

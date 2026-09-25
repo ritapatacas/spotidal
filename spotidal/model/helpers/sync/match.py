@@ -1,3 +1,4 @@
+import re
 from difflib import SequenceMatcher
 from typing import Sequence, Set
 import tidalapi
@@ -103,3 +104,38 @@ def test_album_similarity(sp_album, td_album, threshold=0.6):
     return SequenceMatcher(
         None, simple(sp_album["name"]), simple(td_album.name)
     ).ratio() >= threshold and artist_match(td_album, sp_album)
+
+# --- looser fallback matching, tried only after the strict passes above
+# have both failed (see search.py's td_search) ---
+#
+# artist_match()'s splitter only recognizes "&"/"," as joining multiple
+# artists, so a single TIDAL artist credit like "Disclosure feat. Sam
+# Smith" or "AC/DC" (a band name that happens to contain "/") never lines
+# up against the Spotify side's separately-listed artists. This wider
+# splitter also recognizes "feat."/"ft."/"x"/"×"/"and" as separators.
+_LOOSE_ARTIST_SPLIT_RE = re.compile(r",|&|/|\bfeat\.?|\bft\.?|\bx\b|×|\band\b", re.IGNORECASE)
+
+def split_artists_loose(artist: str) -> Sequence[str]:
+    return [part.strip() for part in _LOOSE_ARTIST_SPLIT_RE.split(artist) if part.strip()]
+
+def loose_name_match(td_track, sp_track) -> bool:
+    return normalize(simple(sp_track["name"]).lower()) == normalize(simple(td_track.name).lower())
+
+def loose_artist_match(td_track, sp_track) -> bool:
+    td_names = [a.name for a in (td_track.artists or [])] or [td_track.artist.name]
+    td_set = {normalize(simple(part)).lower() for name in td_names for part in split_artists_loose(name)}
+    sp_set = {
+        normalize(simple(part)).lower()
+        for artist in sp_track["artists"]
+        for part in split_artists_loose(artist["name"])
+    }
+    return bool(td_set & sp_set)
+
+def loose_match(td_track, sp_track, duration_tolerance=10) -> bool:
+    if not sp_track["id"]:
+        return False
+    return isrc_match(td_track, sp_track) or (
+        duration_match(td_track, sp_track, tolerance=duration_tolerance)
+        and loose_name_match(td_track, sp_track)
+        and loose_artist_match(td_track, sp_track)
+    )
