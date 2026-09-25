@@ -374,6 +374,13 @@ class Download:
                     )
                     if result is None:
                         errors += 1
+                        progress.update(1 - track_progress)
+                        track_progress = 1.0
+                        progress.clear()
+                        tqdm.write(
+                            t.error(f"failed to download '{track.name}'") + "\n",
+                            file=sys.stdout,
+                        )
                     elif result[1] or result[2]:
                         processed += 1
                         if result[1]:
@@ -413,9 +420,20 @@ class Download:
             return downloaded, errors, processed
 
         try:
+            total_downloaded = total_errors = total_processed = 0
             for batch_number, batch in enumerate(batches, 1):
-                download_batch(batch_number, batch)
+                downloaded, errors, processed = download_batch(batch_number, batch)
+                total_downloaded += downloaded
+                total_errors += errors
+                total_processed += processed
             clean_tmp(Files.SETTINGS.load().get("flacDirectory"))
+            if total > 0:
+                progress.clear()
+                tqdm.write(t.log(
+                    f"{playlist_label} done: {total_downloaded} downloaded, "
+                    f"{total_processed - total_downloaded} skipped, "
+                    f"{total_errors} failed"
+                ), file=sys.stdout)
         finally:
             if own_progress:
                 progress.close()
