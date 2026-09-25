@@ -468,13 +468,10 @@ class Controller:
             print(t.warning(f"no tracks found for scope '{label}'"))
             return
         print(t.busy(f"rym harvest: {len(rows)} track(s) in scope '{label}'"))
-        try:
-            stats = self._run_task(_rym_harvest, filler, rows)
-        except Exception as error:
-            print(t.error(f"rym harvest failed: {error}"))
-            print(t.log(
-                "install the browser once with: poetry run playwright install chrome"
-            ))
+        stats, error = _run_rym_harvest_or_report(
+            lambda: self._run_task(_rym_harvest, filler, rows)
+        )
+        if error:
             return
         _log_rym_stats(stats)
 
@@ -593,6 +590,18 @@ def _rym_harvest(filler, rows, retry=False):
         filler.client.close()
 
 
+def _run_rym_harvest_or_report(run):
+    """Run a zero-arg RYM harvest callable, reporting the shared failure message."""
+    try:
+        return run(), None
+    except Exception as error:
+        print(t.error(f"rym harvest failed: {error}"))
+        print(t.log(
+            "install the browser once with: poetry run playwright install chrome"
+        ))
+        return None, error
+
+
 def _log_rym_stats(stats):
     print(t.log(
         f"rym harvest done: {stats['filled']} filled, "
@@ -678,13 +687,8 @@ def _run_rym_harvest_cli(settings, scope, retry, max_pages):
         print(t.warning(f"no tracks found for scope '{scope}'"))
         return 0
     print(t.busy(f"rym harvest: {len(rows)} track(s) in scope '{scope}'"))
-    try:
-        stats = _rym_harvest(filler, rows, retry)
-    except Exception as error:
-        print(t.error(f"rym harvest failed: {error}"))
-        print(t.log(
-            "install the browser once with: poetry run playwright install chrome"
-        ))
+    stats, error = _run_rym_harvest_or_report(lambda: _rym_harvest(filler, rows, retry))
+    if error:
         return 1
     stopped = _log_rym_stats(stats)
     if stopped is None:
