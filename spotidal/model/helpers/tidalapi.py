@@ -46,6 +46,19 @@ def clear_td_playlist(playlist: tidalapi.UserPlaylist, chunk_size: int = 20):
                 _remove_indices_from_playlist(playlist, indices)
             progress.update(before - playlist.num_tracks)
 
+def swap_track_in_playlist(playlist: tidalapi.UserPlaylist, old_track_id: int, new_track_id: int):
+    """Replace one track with another in-place. Used when an "original
+    album" review decision arrives after the playlist was already built
+    with the Spotify-side track — position isn't preserved (the
+    replacement lands at the end), which is an acceptable tradeoff for
+    something that should be rare."""
+    tracks = playlist.tracks()
+    indices = [i for i, track in enumerate(tracks) if track.id == old_track_id]
+    if indices:
+        _remove_indices_from_playlist(playlist, indices)
+    add_multiple_tracks_to_playlist(playlist, [new_track_id])
+
+
 def add_multiple_tracks_to_playlist(
     playlist: tidalapi.UserPlaylist, track_ids: List[int], chunk_size: int = 20
 ):

@@ -66,6 +66,7 @@ class Controller:
             print(t.error(
                 f"{len(not_found)} track(s) not found: {', '.join(not_found)}"
             ))
+        self.app.resolve_original_album_choices()
         delay = self.app.get_notify_sound_delay()
         if delay and (time.monotonic() - started) >= delay * 60:
             play_task_done()

@@ -21,6 +21,8 @@ from spotidal.view.prompt import (
     ToggleMenu,
     SearchMenu,
     SelectMenu,
+    OriginalAlbumMenu,
+    OriginalAlbumReviewMenu,
     SaveSelectionMenu,
     ConfirmMenu,
     URLMenu,
@@ -135,6 +137,12 @@ def select_menu(get_remaining_playlists, selected=None):
 
 def url_menu():
     return URLMenu().display()
+
+def original_album_menu(count):
+    return OriginalAlbumMenu().display(count)
+
+def original_album_review_menu(choices):
+    return OriginalAlbumReviewMenu().display(choices)
 
 """ def run():
     global current_selection

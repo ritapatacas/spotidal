@@ -615,6 +615,68 @@ class SelectMenu(MenuBase):
         return response.get("selected_playlists")
 
 
+class OriginalAlbumMenu(MenuBase):
+    USE_SPOTIFY = "use the spotify versions"
+    USE_ORIGINAL = "use the original album versions"
+    REVIEW = "review the list"
+    CHOICE_OPT = [USE_SPOTIFY, USE_ORIGINAL, REVIEW]
+
+    def __init__(self):
+        super().__init__(Prompt.LIST)
+        self.options = self.CHOICE_OPT
+
+    def display(self, count):
+        questions = [
+            {
+                "type": "list",
+                "name": "action",
+                "message": f"{count} track(s) matched from a non-original album — what do you want to do?",
+                "choices": self.options,
+                "mandatory": False,
+                "keybindings": BACK_KEYBINDINGS,
+            }
+        ]
+        response = _ask(questions)
+        return response.get("action")
+
+
+class OriginalAlbumReviewMenu(MenuBase):
+    REVIEW_Q = "pick which to use as original (all original = a, all spotify = n, cancel = c, confirm = enter)"
+
+    def __init__(self):
+        super().__init__(Prompt.LIST)
+
+    def display(self, choices):
+        items = [
+            {
+                "name": (
+                    f"{c['spotify_track'].artist.name} - {c['spotify_track'].name}  |  "
+                    f"spotify: {c['spotify_track'].album.name}  ->  original: {c['original_track'].album.name}"
+                ),
+                "value": i,
+                "enabled": False,
+            }
+            for i, c in enumerate(choices)
+        ]
+        keybindings = {
+            "toggle-all-true": [{"key": "a"}],
+            "toggle-all-false": [{"key": "n"}],
+            "answer": [{"key": "enter"}],
+            "skip": [{"key": "escape"}, {"key": "c"}],
+        }
+        questions = [
+            {
+                "type": "checkbox",
+                "message": self.REVIEW_Q,
+                "name": "use_original",
+                "choices": items,
+                "mandatory": False,
+            }
+        ]
+        response = _ask(questions, keybindings=keybindings)
+        return response.get("use_original")
+
+
 class SearchMenu(MenuBase):
     def __init__(self):
         super().__init__(Prompt.SEARCH)

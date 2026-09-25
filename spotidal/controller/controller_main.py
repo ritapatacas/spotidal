@@ -145,6 +145,45 @@ class ControllerMain:
                     f"skipping '{str(p)}': no matching spotify playlist id"
                 ))
 
+    def resolve_original_album_choices(self):
+        from ..model.helpers.sync.search import pop_original_album_choices
+        from ..model.helpers.cache import track_match_cache
+        from ..model.helpers.sync.playlists_handler import get_td_playlists_wrapper
+        from ..model.helpers.tidalapi import swap_track_in_playlist
+        from ..view.prompt import OriginalAlbumMenu
+
+        choices = pop_original_album_choices()
+        if not choices:
+            return
+
+        action = view.original_album_menu(len(choices))
+        if action is None or action == OriginalAlbumMenu.USE_SPOTIFY:
+            return  # spotify is already what got used during search
+
+        if action == OriginalAlbumMenu.USE_ORIGINAL:
+            use_original = set(range(len(choices)))
+        else:
+            selected = view.original_album_review_menu(choices)
+            if not selected:
+                print(t.warning("cancelled; keeping the spotify versions"))
+                return
+            use_original = set(selected)
+
+        td_playlists = get_td_playlists_wrapper(self.model.sessions["td"])
+        swapped = 0
+        for i in use_original:
+            choice = choices[i]
+            track_match_cache.insert((choice["sp_track"]["id"], choice["original_track"].id))
+            playlist = td_playlists.get(choice["playlist_name"])
+            if not playlist:
+                continue
+            try:
+                swap_track_in_playlist(playlist, choice["spotify_track"].id, choice["original_track"].id)
+                swapped += 1
+            except Exception as error:
+                print(t.warning(f"could not update playlist '{choice['playlist_name']}': {error}"))
+        print(t.log(f"switched {swapped}/{len(use_original)} track(s) to their original album version"))
+
     def _start_playlist_job(self, reference):
         info = self._playlist_info(reference)
         name = info["name"] if info else str(reference)
