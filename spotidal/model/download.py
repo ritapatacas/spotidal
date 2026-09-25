@@ -310,14 +310,9 @@ class Download:
             tail = f"[{t.format_elapsed(elapsed)}] @ {datetime.now():%H:%M:%S}"
 
             downloaded_so_far = getattr(progress, "downloaded_count", 0)
-            already_available = overall["skipped_total"] + downloaded_so_far
-            still_to_download = overall["pending_total"] - downloaded_so_far
-            summary_line = t.busy("downloaded playlists: ") + (
+            summary_line = t.busy("downloaded: ") + (
                 f"{playlist_number - 1}/{playlist_total} playlists - "
-                f"{overall['total_tracks']} tracks "
-            ) + t.grey(
-                f"({already_available} already available, "
-                f"{still_to_download} to download)"
+                f"{downloaded_so_far}/{overall['pending_total']} tracks"
             )
             header += t.right_align(summary_line, tail) + "\n"
 
