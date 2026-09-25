@@ -414,7 +414,8 @@ class Controller:
                     continue
                 self._fill_genres_for_playlists(names)
             elif action == UtilsMenu.FILL_SELECT_PLAYLISTS:
-                names = view.select_menu(self.app.playlist_names())
+                preselected = self.model.current_selection or set(self.playlists.load())
+                names = view.select_menu(self.app.playlist_names(), preselected)
                 if names:
                     self._fill_genres_for_playlists(names)
 
@@ -442,7 +443,8 @@ class Controller:
             elif action == UtilsMenu.FILL_ALL:
                 self._harvest_rym_scope("all")
             elif action == UtilsMenu.FILL_SELECT_PLAYLISTS:
-                names = view.select_menu(self.app.playlist_names())
+                preselected = self.model.current_selection or set(self.playlists.load())
+                names = view.select_menu(self.app.playlist_names(), preselected)
                 if names:
                     self._harvest_rym_scope(names)
 
