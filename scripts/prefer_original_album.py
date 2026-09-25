@@ -1,28 +1,33 @@
 #!/usr/bin/env python3
 """
-Find tracks in the library currently linked to a compilation/"best of"
-album (or a generic algorithmic pseudo-album — TIDAL's catalog is full of
-these now: "Trippy Summer", "90er Party Hits", etc., which don't match
-any "best of"-style name pattern) and re-point them at the original
-studio release when one exists.
+Find tracks in the library currently linked to a "best of"/compilation
+album (or a generic algorithmic pseudo-album TIDAL's catalog is now full
+of — "Trippy Summer", "90er Party Hits", etc. — that don't match any
+"best of"-style name pattern) and re-point them at the real original
+studio album, using MusicBrainz as an independent arbiter instead of
+guessing from name patterns or "earliest date on TIDAL" (both proved
+unreliable — TIDAL is full of unlabeled compilations).
 
 For each candidate track:
-  1. search TIDAL by title+artist
-  2. keep only candidates whose title and artist actually match (not just
-     "showed up in the search"), whose album isn't itself compilation-like,
-     and whose duration is within DURATION_TOLERANCE_S of the local file's
-     real duration (not just ISRC — TIDAL frequently reissues the same
-     song under several ISRCs, and restricting to one exact ISRC can rule
-     out the one genuine original-album pressing)
-  3. of what's left, pick the earliest release_date
+  1. look up its ISRC on MusicBrainz (musicbrainz.org/ws/2/isrc/<isrc>)
+  2. fetch that recording's releases, filtered to release-group
+     primary-type "Album" with no secondary-types (no Compilation/Live/
+     Soundtrack/Remix/etc tag) — the genuine studio album(s)
+  3. take the earliest such release's title as the canonical original
+     album name
+  4. search TIDAL for title+artist, and accept a candidate only if its
+     title/artist/duration match AND its album name matches (loosely)
+     the MusicBrainz-confirmed original album name
 
-Never touches a track with no matching, non-compilation candidate — stays
-as-is rather than guessing at something worse. Verified against 7 known
-cases before trusting this: see PR discussion / commit message.
+Skips (leaves untouched) whenever MusicBrainz has no ISRC match, no
+clean "Album"-type release, or TIDAL doesn't have that specific album —
+never guesses a fix without independent confirmation.
+
+Respects MusicBrainz's 1 request/second rate limit.
 
 Usage:
     poetry run python scripts/prefer_original_album.py --dry-run
-    poetry run python scripts/prefer_original_album.py --apply-from PATH  # apply a --dry-run's --out csv
+    poetry run python scripts/prefer_original_album.py --apply-from PATH
 """
 import argparse
 import csv
@@ -33,8 +38,8 @@ import time
 import unicodedata
 from pathlib import Path
 
+import requests
 import tidalapi
-from mutagen.flac import FLAC
 
 import spotidal.model.auth as auth
 from spotidal.model.helpers.type.file import Files
@@ -46,6 +51,8 @@ GREY = "\033[38;5;102m"
 WHITE = "\033[0m"
 
 DURATION_TOLERANCE_S = 10
+MB_HEADERS = {"User-Agent": "spotidal-library-cleanup/1.0 (personal use)"}
+MB_RATE_LIMIT_S = 1.1
 
 COMPILATION_PATTERN = re.compile(
     r"best of|greatest hits|the hits|hits collection|hits of|anthology|"
@@ -87,24 +94,53 @@ def artists_overlap(local_artist, td_track):
     return bool(local_set & td_set)
 
 
-def local_flac_duration(conn, root, track_id):
-    row = conn.execute(
-        "SELECT path FROM files WHERE track_id=? AND format='flac' LIMIT 1", (track_id,)
-    ).fetchone()
-    if not row:
+_last_mb_call = 0.0
+
+
+def _mb_get(url, params):
+    global _last_mb_call
+    wait = MB_RATE_LIMIT_S - (time.monotonic() - _last_mb_call)
+    if wait > 0:
+        time.sleep(wait)
+    response = requests.get(url, params=params, headers=MB_HEADERS, timeout=15)
+    _last_mb_call = time.monotonic()
+    response.raise_for_status()
+    return response.json()
+
+
+def musicbrainz_original_album(isrc):
+    if not isrc:
         return None
     try:
-        return FLAC(root / row[0]).info.length
-    except Exception:
+        data = _mb_get(f"https://musicbrainz.org/ws/2/isrc/{isrc}", {"fmt": "json"})
+    except requests.exceptions.HTTPError as error:
+        if error.response is not None and error.response.status_code == 404:
+            return None
+        raise
+    recordings = data.get("recordings", [])
+    if not recordings:
         return None
+    recording_id = recordings[0]["id"]
+    detail = _mb_get(
+        f"https://musicbrainz.org/ws/2/recording/{recording_id}",
+        {"inc": "releases+release-groups", "fmt": "json"},
+    )
+    studio_releases = [
+        r for r in detail.get("releases", [])
+        if r.get("release-group", {}).get("primary-type") == "Album"
+        and not r.get("release-group", {}).get("secondary-types")
+    ]
+    if not studio_releases:
+        return None
+    studio_releases.sort(key=lambda r: r.get("date") or "9999")
+    return studio_releases[0]["title"]
 
 
-def find_original_album_track(td_session, title, artist, local_duration):
+def find_tidal_track_in_album(td_session, title, artist, album_name, local_duration):
     query = f"{strip_version_suffix(title)} {artist}"
     results = td_session.search(query, models=[tidalapi.media.Track])
-    candidates = []
     for c in results.get("tracks", []):
-        if not c.album or is_compilation(c.album.name):
+        if not c.album or clean(c.album.name) != clean(album_name):
             continue
         if clean(c.name) != clean(title):
             continue
@@ -112,11 +148,8 @@ def find_original_album_track(td_session, title, artist, local_duration):
             continue
         if local_duration and abs(c.duration - local_duration) > DURATION_TOLERANCE_S:
             continue
-        candidates.append(c)
-    if not candidates:
-        return None
-    candidates.sort(key=lambda c: c.album.release_date or "9999-99-99")
-    return candidates[0]
+        return c
+    return None
 
 
 def main():
@@ -158,31 +191,51 @@ def main():
         writer = csv.writer(out_f)
         writer.writerow([
             "action", "track_id", "title", "artist", "current_album", "current_tidal_id",
-            "new_album", "new_tidal_id", "new_release_date",
+            "mb_original_album", "new_tidal_id", "new_album",
         ])
 
         for i, (track_id, title, artist, album, isrc, tidal_id) in enumerate(candidates, 1):
             try:
-                local_duration = local_flac_duration(conn, root, track_id)
-                time.sleep(1)
-                found = find_original_album_track(td_session, title, artist, local_duration)
+                original_album = musicbrainz_original_album(isrc)
             except Exception as error:
                 errors += 1
-                print(_grey(f"  error on {artist} - {title}: {error}"))
+                print(_grey(f"  musicbrainz error on {artist} - {title}: {error}"))
+                writer.writerow(["error", track_id, title, artist, album, tidal_id, "", "", ""])
+                continue
+
+            if not original_album or clean(original_album) == clean(album):
+                kept += 1
+                writer.writerow(["kept", track_id, title, artist, album, tidal_id, original_album or "", "", ""])
+                print(_grey(f"  [{i}/{len(candidates)}] kept: {artist} - {title}"))
+                continue
+
+            root_row = None
+            try:
+                from mutagen.flac import FLAC
+                row = conn.execute(
+                    "SELECT path FROM files WHERE track_id=? AND format='flac' LIMIT 1", (track_id,)
+                ).fetchone()
+                local_duration = FLAC(root / row[0]).info.length if row else None
+                time.sleep(1)
+                found = find_tidal_track_in_album(td_session, title, artist, original_album, local_duration)
+            except Exception as error:
+                errors += 1
+                print(_grey(f"  tidal error on {artist} - {title}: {error}"))
+                writer.writerow(["error", track_id, title, artist, album, tidal_id, original_album, "", ""])
                 continue
 
             if found and str(found.id) != str(tidal_id):
                 fixed += 1
                 writer.writerow([
                     "fixed", track_id, title, artist, album, tidal_id,
-                    found.album.name, found.id, found.album.release_date,
+                    original_album, found.id, found.album.name,
                 ])
                 print(_grey(f"  [{i}/{len(candidates)}] fixed: {artist} - {title} -> {found.album.name}"))
             else:
                 kept += 1
-                writer.writerow(["kept", track_id, title, artist, album, tidal_id, "", "", ""])
+                writer.writerow(["kept", track_id, title, artist, album, tidal_id, original_album, "", ""])
 
-    print(f"\ndone: {fixed} fixed (original album found), {kept} kept (no better option), {errors} errors")
+    print(f"\ndone: {fixed} fixed, {kept} kept, {errors} errors")
     print(f"details in {args.out}")
     print("(dry run — nothing written to the database; re-run with --apply-from to apply)")
 
