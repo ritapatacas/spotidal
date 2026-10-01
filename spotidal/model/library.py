@@ -124,6 +124,20 @@ CREATE TABLE IF NOT EXISTS rym_release_genre (
     kind TEXT NOT NULL CHECK (kind IN ('primary', 'secondary', 'descriptor')),
     UNIQUE (rym_release_id, name, kind)
 );
+CREATE TABLE IF NOT EXISTS soulseek_candidates (
+    soulseek_candidate_id INTEGER PRIMARY KEY,
+    track_id TEXT NOT NULL REFERENCES tracks(track_id),
+    username TEXT NOT NULL, remote_path TEXT NOT NULL, filename TEXT NOT NULL,
+    extension TEXT, size_bytes INTEGER, bitrate INTEGER, duration_seconds INTEGER,
+    availability INTEGER, speed_estimate REAL,
+    score REAL, score_breakdown TEXT, rejection_reasons TEXT,
+    selected INTEGER NOT NULL DEFAULT 0,
+    slskd_transfer_id TEXT, status TEXT NOT NULL DEFAULT 'pending', error TEXT,
+    started_at TEXT, completed_at TEXT,
+    created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_soulseek_candidates_track
+    ON soulseek_candidates(track_id);
 """
 
 FINAL_GENRE_SEED = [
@@ -259,6 +273,10 @@ class MusicLibrary:
             }
             if "missing_at" not in columns:
                 connection.execute("ALTER TABLE files ADD COLUMN missing_at TEXT")
+            if "source" not in columns:
+                connection.execute(
+                    "ALTER TABLE files ADD COLUMN source TEXT NOT NULL DEFAULT 'tidal'"
+                )
             track_columns = {
                 row[1] for row in connection.execute("PRAGMA table_info(tracks)")
             }
@@ -397,6 +415,10 @@ class MusicLibrary:
             )
             connection.execute(
                 "INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES(9, ?)",
+                (_now(),),
+            )
+            connection.execute(
+                "INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES(10, ?)",
                 (_now(),),
             )
 

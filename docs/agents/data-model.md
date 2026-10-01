@@ -23,7 +23,7 @@ existing database to be dropped.
 | `schema_migrations` | `version`, `applied_at` | Migration bookkeeping. |
 | `tracks` | `track_id` (uuid7 TEXT PK), `title`, `artist`, `album`, `isrc`, `spotify_id`, `tidal_id`, `year`, `genre`, `style`, `review_reason`, `reviewed_at` | The canonical track. Indexed on `isrc`, `spotify_id`, `tidal_id`. `review_reason`/`reviewed_at` back the playlist-consistency audit's "flagged" bucket — `NULL` means not flagged (or cleared on a later clean re-check); see [workflows.md](workflows.md) section 3. |
 | `locations` | `location_id`, `name` UNIQUE, `root_path`, `type` | A scanned root directory. Supports multiple libraries (`otherLocations` in settings). |
-| `files` | `file_id`, `track_id` → `tracks`, `location_id` → `locations`, `format`, `path`, `filename`, `bitrate`, `sample_rate`, `bit_depth`, `file_size`, `missing_at`, `UNIQUE(location_id, path)` | One row per physical file. One track may have both a FLAC and an MP3 row. |
+| `files` | `file_id`, `track_id` → `tracks`, `location_id` → `locations`, `format`, `path`, `filename`, `bitrate`, `sample_rate`, `bit_depth`, `file_size`, `missing_at`, `source` (default `'tidal'`), `UNIQUE(location_id, path)` | One row per physical file. One track may have both a FLAC and an MP3 row. `source` records which download backend produced the file (`'tidal'` or `'soulseek'`). |
 | `playlists` | `playlist_id`, `name` **UNIQUE**, `spotify_playlist_id`, `tidal_playlist_id`, `total_tracks`, `matched_tracks` | See the caveat below. |
 | `playlist_tracks` | `PRIMARY KEY (playlist_id, track_id)` | Membership only — **no position column**, playlist order is not stored. |
 | `genre`, `style` | name tables | Vocabulary. |
@@ -31,6 +31,7 @@ existing database to be dropped.
 | `rym_release`, `rym_release_genre` | | Cached Rate Your Music lookups. `rym_path` (e.g. `/release/album/artist/title/`) is the stable identity. |
 | `harvest_log` | `PK (track_id, source)`, `attempts`, `outcome` | One row per (track, harvest). `source` is `'discogs'` or `'rym'`; the two harvests never share attempt counts. |
 | `final_genre`, `track_genre_style` | | The resolved genre/style assigned to a track. |
+| `soulseek_candidates` | `soulseek_candidate_id`, `track_id` → `tracks`, `username`, `remote_path`, `filename`, `extension`, `size_bytes`, `bitrate`, `duration_seconds`, `availability`, `speed_estimate`, `score`, `score_breakdown` (JSON), `rejection_reasons` (JSON), `selected`, `slskd_transfer_id`, `status`, `error` | One row per Soulseek search result considered for a track — search/selection/transfer bookkeeping for the Soulseek download backend (see `PLAN-SOULSEEK.md`). Not used by TIDAL downloads. |
 
 ### Two constraints to know before you write DB code
 
