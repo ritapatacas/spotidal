@@ -16,6 +16,7 @@ from spotidal.model.helpers.sync.search import pop_not_found_tracks
 from spotidal.view.setup import get_credentials
 
 from spotidal.view.prompt import (
+    DefaultSelectionMenu,
     MainMenu,
     SelectionModeMenu,
     SettingsMenu,
@@ -112,12 +113,16 @@ class Controller:
                             "  sync: pick playlists and keep them in sync\n"
                             "  convert: convert downloaded FLAC files to MP3\n"
                             "  explore library: browse/filter your local library and get mixing suggestions (opens a browser tab)\n"
+                            "  export to rekordbox: pick playlists and export xml+m3u8 for rekordbox import\n"
                             "  utils: playlist selection, tmp cleanup, session refresh, database tools, rekordbox export\n"
                             "  settings: downloads and database configuration"
                         ))
 
                 elif menu == MainMenu.UTILS[0]:
                     self._utils_menu()
+
+                elif menu == MainMenu.EXPORT_REKORDBOX[0]:
+                    self._export_rekordbox()
 
                 elif menu == MainMenu.SYNC[0] or menu == MainMenu.DOWNLOAD[0]:
                     if self.model.current_selection:
@@ -218,21 +223,21 @@ class Controller:
             action = view.default_selection_menu()
             if self._is_back(action):
                 return
-            if action == "view selection":
+            if action == DefaultSelectionMenu.VIEW:
                 selection = self.playlists.load()
                 if not selection:
                     print("> no default playlists selected")
                 else:
                     stats = self.app.get_selection_stats(selection)
                     print(t.display_selection_table(stats))
-            elif action == "refresh selection stats":
+            elif action == DefaultSelectionMenu.REFRESH:
                 selection = self.playlists.load()
                 if not selection:
                     print("> no default playlists selected")
                 else:
                     stats = self._run_task(self.app.get_selection_stats, selection, force_refresh=True)
                     print(t.display_selection_table(stats))
-            elif action == "change selection":
+            elif action == DefaultSelectionMenu.CHANGE:
                 selection = view.select_menu(
                     self.playlists.names(), self.playlists.load()
                 )
@@ -273,11 +278,18 @@ class Controller:
 
     def _utils_menu(self):
         self._run_submenu(UtilsMenu.UTILS_Q, UtilsMenu.UTILS_OPT, {
+            UtilsMenu.SYNC_DATABASE: self._sync_database,
+            UtilsMenu.MANAGE_SELECTED_PLAYLIST: self._default_selection,
+            UtilsMenu.DOCTORS: self._utils_doctors,
+            UtilsMenu.GENRES: self._utils_genres,
+        })
+
+    def _utils_doctors(self):
+        self._run_submenu(UtilsMenu.DOCTORS, UtilsMenu.DOCTORS_OPT, {
             UtilsMenu.PLAYLISTS: self._utils_playlists,
             UtilsMenu.DOWNLOAD: self._utils_download,
-            UtilsMenu.LOCAL_FILES: self._utils_local_files,
             UtilsMenu.DATABASE: self._utils_database,
-            UtilsMenu.GENRES: self._utils_genres,
+            UtilsMenu.LOCAL_FILES: self._utils_local_files,
         })
 
     def _run_submenu(self, title, options, handlers):
@@ -296,17 +308,33 @@ class Controller:
 
     def _utils_playlists(self):
         self._run_submenu(UtilsMenu.PLAYLISTS, UtilsMenu.PLAYLISTS_OPT, {
-            UtilsMenu.MANAGE_SELECTED_PLAYLIST: self._default_selection,
-            UtilsMenu.DOCTOR_PLAYLISTS: lambda: self._run_task(self.app.doctor_playlists),
-            UtilsMenu.WATCH_PLAYLIST_FILES: self._watch_playlist_files,
-            UtilsMenu.EXPORT_REKORDBOX: lambda: self._run_task(self.app.export_rekordbox),
+            UtilsMenu.DOCTOR_PLAYLISTS: self._playlists_doctor,
+            UtilsMenu.AUDIT_CONSISTENCY: self._audit_consistency,
         })
+
+    def _playlists_doctor(self):
+        self._run_task(self.app.doctor_playlists)
+        names = set(self.playlists.load())
+        if not names:
+            print(t.warning(
+                "no default playlist selection to refresh"
+                " (utils > playlists > manage selected playlist)"
+            ))
+            return
+        if not view.confirm_menu("refresh these playlists from TIDAL now?"):
+            return
+        stats = self._run_task(self.app.get_selection_stats, names, force_refresh=True)
+        print(t.display_selection_table(stats))
+
+    def _export_rekordbox(self):
+        names = self._select_menu(self.app.playlist_names())
+        if names:
+            self._run_task(self.app.export_rekordbox, names)
 
     def _utils_download(self):
         self._run_submenu(UtilsMenu.DOWNLOAD, UtilsMenu.DOWNLOAD_OPT, {
             UtilsMenu.DOCTOR_DOWNLOAD: lambda: self._run_task(self.app.doctor_download),
             UtilsMenu.DOCTOR_MISSING_TRACKS: lambda: self._run_task(self.app.doctor_missing_tracks),
-            UtilsMenu.DOWNLOAD_CURRENT_MISSING: lambda: self._run_task(self.app.download_current_missing_tracks),
             UtilsMenu.TIDEKEEPER_DOCTOR: self.app.tidekeeper_doctor,
             UtilsMenu.CLEAN_TMP: lambda: self._run_task(self.app.clean_tmp),
             UtilsMenu.REFRESH_SESSION: self._refresh_tidal_session,
@@ -323,9 +351,6 @@ class Controller:
             UtilsMenu.DOCTOR_MP3_QUALITY: lambda: self._run_task(self.app.doctor_mp3_quality),
             UtilsMenu.CONVERT_TO_FLAC: lambda: self._run_task(self.app.normalize_to_flac),
             UtilsMenu.RUN_WATCHER: lambda: self._run_task(self.app.reconcile_library),
-            UtilsMenu.WATCH_PLAYLIST_FILES: self._watch_playlist_files,
-            UtilsMenu.EXPORT_REKORDBOX: lambda: self._run_task(self.app.export_rekordbox),
-            UtilsMenu.AUDIT_CONSISTENCY: self._audit_consistency,
         })
 
     def _audit_consistency(self):
@@ -335,13 +360,28 @@ class Controller:
 
     def _utils_database(self):
         self._run_submenu(UtilsMenu.DATABASE, UtilsMenu.DATABASE_OPT, {
-            UtilsMenu.DOCTOR_PLAYLISTS: lambda: self._run_task(self.app.doctor_playlists),
+            UtilsMenu.DOCTOR_PLAYLISTS: self._playlists_doctor,
             UtilsMenu.RUN_WATCHER: lambda: self._run_task(self.app.reconcile_library),
             UtilsMenu.WATCH_PLAYLIST_FILES: self._watch_playlist_files,
             UtilsMenu.FIX_MISSING_DATA: lambda: self._run_task(self.app.fill_missing_database_data),
             UtilsMenu.FILL_GENRES: lambda: self._run_task(self.app.fill_genres),
             UtilsMenu.IMPORT_REKORDBOX_BPM_KEY: lambda: self._run_task(self.app.import_rekordbox_metadata),
         })
+
+    def _sync_database(self):
+        print(t.log("1/3 reconciling local files"))
+        self._run_task(self.app.reconcile_library)
+
+        names = self._select_menu(self.app.playlist_names())
+        if names:
+            print(t.log("2/3 refreshing playlist membership from TIDAL"))
+            stats = self._run_task(self.app.get_selection_stats, names, force_refresh=True)
+            print(t.display_selection_table(stats))
+        else:
+            print(t.log("2/3 skipped (no playlists selected)"))
+
+        print(t.log("3/3 repairing database"))
+        self._run_task(self.app.fill_missing_database_data)
 
     def _utils_genres(self):
         self._run_submenu(UtilsMenu.GENRES, UtilsMenu.GENRES_OPT, {

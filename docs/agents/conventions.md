@@ -37,13 +37,31 @@ class UtilsMenu(MenuBase):
 Three steps, all required:
 
 1. Add the constant to the menu class.
-2. Add it to the relevant `*_OPT` list (the Utils menu is grouped into
-   `PLAYLISTS_OPT`, `DOWNLOAD_OPT`, `LOCAL_FILES_OPT`, `DATABASE_OPT`, `GENRES_OPT` —
-   an action may legitimately appear in more than one).
-3. Handle it in `ControllerMain`, comparing against the constant, never a literal.
+2. Add it to the relevant `*_OPT` list (the Utils menu is grouped into `PLAYLISTS_OPT`,
+   `DOWNLOAD_OPT`, `LOCAL_FILES_OPT`, `DATABASE_OPT`, `GENRES_OPT`, nested one level
+   under `DOCTORS_OPT`, plus top-level `UTILS_OPT` for composite/routine actions — see
+   below. An action may legitimately appear in more than one list.)
+3. Handle it in `ControllerMain`, comparing against the constant, never a literal
+   (`_default_selection` in `controller.py` is the reference for this — it imports
+   `DefaultSelectionMenu` and compares against `DefaultSelectionMenu.VIEW` etc.,
+   not raw strings, so relabeling a menu item can't silently break its handler).
 
 Every menu passes `"mandatory": False` and `BACK_KEYBINDINGS` so the user can escape.
 Keep that, and keep menu labels lowercase — the whole UI is lowercase.
+
+**Where a new `utils` action goes**: composite actions that do several things in
+sequence (like `sync database`, which chains reconcile → TIDAL refresh → repair) go
+directly in top-level `UTILS_OPT`, so they're one click away. Narrow, single-purpose
+commands go in the relevant domain submenu, nested under `doctors` if the submenu is
+majority diagnostic checks. This was a deliberate reorganization (2026-09-25) — see
+[status.md](status.md) for what moved and why.
+
+**Menu labels should say what they compare**, not just what they do — several checks
+in this app look similar but read from different sources (a TIDAL playlist mirror vs.
+the live Spotify playlist vs. local disk vs. the local DB), and a vague label like
+"refresh selection stats" invites assuming it's more complete than it is. Use `tidal
+vs local`, `spotify vs local`, `disk vs db` etc. explicitly. See the "don't conflate"
+table in [workflows.md](workflows.md) section 3 for why this matters in practice.
 
 ## Adding a setting
 
@@ -73,6 +91,17 @@ Files.SELECTION.save(list(selection))
 
 The enum owns the path, the extension, and the JSON/YAML choice. Never open these
 files directly and never hardcode `~/.config/spotidal/...`.
+
+**Exception: logs and review-queue reports.** Diagnostic/report artifacts that aren't
+application *state* — doctor run logs (`LOG_DIR` in `doctor.py`), the
+playlist-consistency audit's CSVs (`NOT_FOUND_REVIEW_CSV` /
+`ALBUM_DIFF_REVIEW_CSV` / `TIDAL_DIFF_REVIEW_CSV` in `webui/server.py`) — are plain
+module-level `Path("~/.config/spotidal/logs/...")` constants, not `Files` enum
+entries. `Files` is for state the app reads back as input (settings, credentials,
+selection); a CSV that's overwritten wholesale on every audit run and only ever read
+back by the same feature's own review UI doesn't need the enum's save/load
+abstraction. Follow this precedent for a new report-style artifact rather than
+forcing it into `Files`.
 
 ## Subprocesses
 

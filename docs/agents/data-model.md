@@ -21,7 +21,7 @@ existing database to be dropped.
 | Table | Key columns | Notes |
 | --- | --- | --- |
 | `schema_migrations` | `version`, `applied_at` | Migration bookkeeping. |
-| `tracks` | `track_id` (uuid7 TEXT PK), `title`, `artist`, `album`, `isrc`, `spotify_id`, `tidal_id`, `year`, `genre`, `style` | The canonical track. Indexed on `isrc`, `spotify_id`, `tidal_id`. |
+| `tracks` | `track_id` (uuid7 TEXT PK), `title`, `artist`, `album`, `isrc`, `spotify_id`, `tidal_id`, `year`, `genre`, `style`, `review_reason`, `reviewed_at` | The canonical track. Indexed on `isrc`, `spotify_id`, `tidal_id`. `review_reason`/`reviewed_at` back the playlist-consistency audit's "flagged" bucket — `NULL` means not flagged (or cleared on a later clean re-check); see [workflows.md](workflows.md) section 3. |
 | `locations` | `location_id`, `name` UNIQUE, `root_path`, `type` | A scanned root directory. Supports multiple libraries (`otherLocations` in settings). |
 | `files` | `file_id`, `track_id` → `tracks`, `location_id` → `locations`, `format`, `path`, `filename`, `bitrate`, `sample_rate`, `bit_depth`, `file_size`, `missing_at`, `UNIQUE(location_id, path)` | One row per physical file. One track may have both a FLAC and an MP3 row. |
 | `playlists` | `playlist_id`, `name` **UNIQUE**, `spotify_playlist_id`, `tidal_playlist_id`, `total_tracks`, `matched_tracks` | See the caveat below. |
@@ -59,9 +59,23 @@ This is the most common source of duplicated work. These already exist:
 - `clear_playlist_tracks(name)`, `playlist_names()`, `track_ids_for_playlists(names)`
 
 **Reporting**
-- `get_playlist_track_stats(name)` → `{"total", "local", "missing"}`
-- `audit_playlist(name)` — per-track detail.
+- `get_playlist_track_stats(name)` → `{"total", "local", "missing"}` — **`total`/`local`
+  are counted against the TIDAL playlist mirror, not Spotify.** See the "don't conflate"
+  table in [workflows.md](workflows.md) section 3 before using this for "is my library
+  complete vs Spotify" — it isn't that.
+- `audit_playlist(name)` — per-track detail, same TIDAL-mirror-vs-local basis as above.
 - `file_details_for_tidal_id(tidal_id)`
+
+**Review queue** (playlist-consistency audit; see [workflows.md](workflows.md) section 3)
+- `find_track_by_isrc(isrc)` — primary lookup; ISRC alone is unreliable across TIDAL vs
+  Spotify, callers should fall back to the next one.
+- `find_tracks_by_title_like(title_fragment, limit=50)` — broad substring candidates,
+  `ORDER BY LENGTH(title) ASC` so a short/common fragment's exact-length match isn't cut
+  off by `limit` behind hundreds of longer titles that merely contain it.
+- `flagged_tracks()` — every track with `review_reason IS NOT NULL`, for the `/review`
+  webui page's Flagged tab.
+- `set_review(track_id, reason)` — set (`reason` a string) or clear (`reason=None`)
+  `review_reason`/`reviewed_at`.
 
 **Tracks and files**
 - `import_file(...)` — the single ingestion path for a file on disk.

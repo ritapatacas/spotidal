@@ -323,6 +323,10 @@ PAGE_HTML = (
           <span class="swatch" style="background:#a000a0;"></span>
           <span class="label">Camelot Wheel</span>
         </div>
+        <div class="menu-item" data-action="review">
+          <span class="swatch" style="background:#c00000;"></span>
+          <span class="label">Review Audit</span>
+        </div>
       </div>
       <button id="start-btn">
         <span class="icon16" style="width:16px;height:16px;"><span></span><span></span><span></span><span></span></span>
@@ -911,6 +915,8 @@ document.querySelectorAll(".menu-item[data-action]").forEach((item) => {
     closeStartMenu();
     if (action === "camelot") {
       openCamelotDialog();
+    } else if (action === "review") {
+      window.open("/review", "spotidal-review", "width=760,height=560,menubar=no,toolbar=no,location=no,status=no,resizable=yes");
     }
   });
 });
@@ -1126,6 +1132,252 @@ $("close-btn").addEventListener("click", () => window.close());
   populateFilterOptions();
   applyFiltersAndRender();
 })();
+</script>
+</body>
+</html>
+"""
+)
+
+
+REVIEW_PAGE_HTML = (
+    """<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>review audit</title>
+<style>
+"""
+    + _RETRO_CSS
+    + """
+  #window { width: 100%; height: 100vh; }
+  #body { display: flex; flex-direction: column; min-height: 0; }
+  .tabs { display: flex; gap: 4px; margin-bottom: 6px; flex: none; }
+  .tabs button { border: 1px outset var(--face); background: var(--face); padding: 4px 10px; cursor: pointer; font-family: inherit; }
+  .tabs button.active { border-style: inset; font-weight: bold; }
+  #panes { display: flex; flex: 1; min-height: 0; gap: 8px; }
+  #list-col { flex: 1.2; overflow-y: auto; border: 1px inset var(--face); background: #fff; }
+  #detail-col { flex: 1; overflow-y: auto; padding: 6px; border: 1px inset var(--face); background: #fff; }
+  table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  th, td { text-align: left; padding: 4px 6px; border-bottom: 1px solid #ddd; }
+  tr.row { cursor: pointer; }
+  tr.row:hover { background: #f0f0f0; }
+  tr.row.selected { background: var(--select-bg); color: var(--select-fg); }
+  .muted { color: var(--muted); font-size: 11px; }
+  .reason { color: #a00000; }
+  .candidate { border: 1px solid #ccc; padding: 6px; margin-bottom: 6px; cursor: pointer; display: flex; align-items: center; gap: 8px; }
+  .candidate:hover { background: #f0f9ff; }
+  #status-line { flex: none; margin-top: 6px; color: var(--muted); font-size: 11px; }
+</style>
+</head>
+<body>
+
+<div id="window">
+  <div class="titlebar">
+    <span class="name">
+      <span class="icon16"><span></span><span></span><span></span><span></span></span>
+      <span class="label">REVIEW AUDIT</span>
+    </span>
+    <span class="btns"><button id="close-btn">&times;</button></span>
+  </div>
+  <div id="body">
+    <div class="tabs" id="tabs"></div>
+    <div id="panes">
+      <div id="list-col">
+        <table>
+          <thead><tr><th>Title</th><th>Artist</th></tr></thead>
+          <tbody id="rows"></tbody>
+        </table>
+      </div>
+      <div id="detail-col"><p class="muted">select a row on the left</p></div>
+    </div>
+    <div id="status-line"></div>
+  </div>
+</div>
+
+<script>
+// "flagged" is special (DB-backed, has the search+fix panel); "not-found"
+// and "album-diff" are plain CSV-backed buckets (list + dismiss only),
+// served generically by /api/review/<name> and /api/review/dismiss/<name>.
+const TABS = [
+  {id: "flagged", label: "Flagged", endpoint: "/api/review/flagged"},
+  {id: "album-diff", label: "Album differs", endpoint: "/api/review/album-diff"},
+  {id: "not-found", label: "Not found", endpoint: "/api/review/not-found"},
+];
+const data = {};
+let activeTab = "flagged";
+let selectedIndex = null;
+
+function tabButton(id) {
+  return document.getElementById("tab-" + id);
+}
+
+async function loadAll() {
+  const tabsEl = document.getElementById("tabs");
+  tabsEl.innerHTML = "";
+  TABS.forEach((tab) => {
+    const btn = document.createElement("button");
+    btn.id = "tab-" + tab.id;
+    btn.className = tab.id === activeTab ? "active" : "";
+    btn.textContent = tab.label;
+    btn.onclick = () => switchTab(tab.id);
+    tabsEl.appendChild(btn);
+  });
+  await Promise.all(TABS.map(async (tab) => {
+    data[tab.id] = await fetch(tab.endpoint).then((r) => r.json());
+    tabButton(tab.id).textContent = `${tab.label} (${data[tab.id].length})`;
+  }));
+  renderList();
+}
+
+function switchTab(id) {
+  activeTab = id;
+  selectedIndex = null;
+  TABS.forEach((tab) => tabButton(tab.id).classList.toggle("active", tab.id === id));
+  renderList();
+  document.getElementById("detail-col").innerHTML = '<p class="muted">select a row on the left</p>';
+}
+
+function currentRows() {
+  return data[activeTab] || [];
+}
+
+function renderList() {
+  const tbody = document.getElementById("rows");
+  tbody.innerHTML = "";
+  currentRows().forEach((row, i) => {
+    const tr = document.createElement("tr");
+    tr.className = "row" + (i === selectedIndex ? " selected" : "");
+    tr.innerHTML = `<td>${row.title || ""}</td><td>${row.artist || ""}</td>`;
+    tr.onclick = () => selectRow(i);
+    tbody.appendChild(tr);
+  });
+}
+
+function selectRow(i) {
+  selectedIndex = i;
+  renderList();
+  if (activeTab === "flagged") renderFlaggedDetail(data.flagged[i]);
+  else renderBucketDetail(activeTab, data[activeTab][i]);
+}
+
+function setStatus(text) {
+  document.getElementById("status-line").textContent = text;
+}
+
+function refreshTabCount(id) {
+  const tab = TABS.find((t) => t.id === id);
+  tabButton(id).textContent = `${tab.label} (${data[id].length})`;
+}
+
+function renderFlaggedDetail(row) {
+  const detail = document.getElementById("detail-col");
+  detail.innerHTML = `
+    <h3 style="margin-top:0">${row.artist || ""} - ${row.title || ""}</h3>
+    <p class="muted">${row.album || ""} &middot; isrc: ${row.isrc || "-"} &middot; tidal_id: ${row.tidal_id || "-"}</p>
+    <p class="reason">${row.review_reason || ""}</p>
+    <button id="dismiss-btn">dismiss (mark reviewed)</button>
+    <hr>
+    <div>
+      <input id="q" type="text" value="${(row.title || "") + " " + (row.artist || "")}" style="width:70%">
+      <button id="search-btn">search tidal</button>
+    </div>
+    <div id="candidates" style="margin-top:8px;"><p class="muted">search to see candidates</p></div>
+  `;
+  document.getElementById("dismiss-btn").onclick = async () => {
+    await fetch("/api/review/dismiss-flagged", {
+      method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({track_id: row.track_id}),
+    });
+    setStatus(`dismissed: ${row.title}`);
+    data.flagged = data.flagged.filter((r) => r.track_id !== row.track_id);
+    selectedIndex = null;
+    refreshTabCount("flagged");
+    renderList();
+    detail.innerHTML = '<p class="muted">select a row on the left</p>';
+  };
+  const runSearch = () => searchTidal(document.getElementById("q").value, row);
+  document.getElementById("search-btn").onclick = runSearch;
+  document.getElementById("q").onkeydown = (e) => { if (e.key === "Enter") runSearch(); };
+}
+
+async function searchTidal(query, row) {
+  const box = document.getElementById("candidates");
+  box.innerHTML = '<p class="muted">searching...</p>';
+  const res = await fetch("/api/review/search?q=" + encodeURIComponent(query));
+  const candidates = await res.json();
+  if (candidates.error) {
+    box.innerHTML = `<p class="reason">${candidates.error}</p>`;
+    return;
+  }
+  box.innerHTML = "";
+  if (!candidates.length) {
+    box.innerHTML = '<p class="muted">no results</p>';
+    return;
+  }
+  candidates.forEach((c) => {
+    const div = document.createElement("div");
+    div.className = "candidate";
+    const cover = c.cover
+      ? `<img src="${c.cover}" width="48" height="48">`
+      : `<div style="width:48px;height:48px;background:#eee"></div>`;
+    div.innerHTML = `${cover}<span><b>${c.artist || ""}</b> - ${c.name}<br><span class="muted">${c.album || ""}${c.isrc === row.isrc ? " &middot; isrc match" : ""}</span></span>`;
+    div.onclick = async () => {
+      await fetch("/api/review/fix", {
+        method: "POST", headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({track_id: row.track_id, tidal_id: c.id}),
+      });
+      setStatus(`fixed: ${row.title} -> tidal_id ${c.id}`);
+      data.flagged = data.flagged.filter((r) => r.track_id !== row.track_id);
+      selectedIndex = null;
+      refreshTabCount("flagged");
+      renderList();
+      document.getElementById("detail-col").innerHTML = '<p class="muted">select a row on the left</p>';
+    };
+    box.appendChild(div);
+  });
+}
+
+function bucketDetailBody(bucket, row) {
+  if (bucket === "album-diff") {
+    return `
+      <p class="muted">playlist: ${row.playlist || ""} &middot; isrc: ${row.isrc || "-"}</p>
+      <p>db album: <b>${row.db_album || ""}</b></p>
+      <p>spotify album: <b>${row.spotify_album || ""}</b></p>
+      <p class="muted">title and artist match; only the album differs — often Spotify filing the track
+      under a "best of"/compilation while the library keeps the real original album.</p>
+    `;
+  }
+  return `
+    <p class="muted">${row.album || ""} &middot; playlist: ${row.playlist || ""} &middot; isrc: ${row.isrc || "-"}</p>
+    <p class="muted">no local track matched this ISRC — not downloaded, or the local file's ISRC tag differs.</p>
+  `;
+}
+
+function renderBucketDetail(bucket, row) {
+  const detail = document.getElementById("detail-col");
+  detail.innerHTML = `
+    <h3 style="margin-top:0">${row.artist || ""} - ${row.title || ""}</h3>
+    ${bucketDetailBody(bucket, row)}
+    <button id="dismiss-btn">dismiss</button>
+  `;
+  document.getElementById("dismiss-btn").onclick = async () => {
+    await fetch("/api/review/dismiss/" + bucket, {
+      method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({spotify_id: row.spotify_id}),
+    });
+    setStatus(`dismissed: ${row.title}`);
+    data[bucket] = data[bucket].filter((r) => r.spotify_id !== row.spotify_id);
+    selectedIndex = null;
+    refreshTabCount(bucket);
+    renderList();
+    detail.innerHTML = '<p class="muted">select a row on the left</p>';
+  };
+}
+
+document.getElementById("close-btn").addEventListener("click", () => window.close());
+
+loadAll();
 </script>
 </body>
 </html>

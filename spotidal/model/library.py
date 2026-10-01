@@ -655,12 +655,54 @@ class MusicLibrary:
             "album": row[3], "spotify_id": row[4], "tidal_id": row[5],
         }
 
+    def find_tracks_by_title_like(self, title_fragment, limit=50):
+        """Fallback lookup for when ISRC matching fails (see
+        audit_playlist_consistency): broad candidates by title substring,
+        for the caller to narrow down with its own title+artist matching.
+
+        Ordered by title length so a short/common fragment (e.g. "One")
+        surfaces its exact-length match first, instead of that row being
+        arbitrarily cut off by `limit` behind hundreds of longer titles
+        that merely contain the same substring.
+        """
+        if not title_fragment:
+            return []
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT track_id, title, artist, album, spotify_id, tidal_id "
+                "FROM tracks WHERE title LIKE ? ORDER BY LENGTH(title) ASC LIMIT ?",
+                (f"%{title_fragment}%", limit),
+            ).fetchall()
+        return [
+            {
+                "track_id": row[0], "title": row[1], "artist": row[2],
+                "album": row[3], "spotify_id": row[4], "tidal_id": row[5],
+            }
+            for row in rows
+        ]
+
     def set_review(self, track_id, reason):
         with self._connect() as connection:
             connection.execute(
                 "UPDATE tracks SET review_reason=?, reviewed_at=? WHERE track_id=?",
                 (reason, _now(), track_id),
             )
+
+    def flagged_tracks(self):
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT track_id, title, artist, album, isrc, tidal_id, "
+                "review_reason, reviewed_at FROM tracks "
+                "WHERE review_reason IS NOT NULL ORDER BY reviewed_at DESC"
+            ).fetchall()
+        return [
+            {
+                "track_id": row[0], "title": row[1], "artist": row[2],
+                "album": row[3], "isrc": row[4], "tidal_id": row[5],
+                "review_reason": row[6], "reviewed_at": row[7],
+            }
+            for row in rows
+        ]
 
     def genre_scan_rows(self, track_ids=None):
         with self._connect() as connection:

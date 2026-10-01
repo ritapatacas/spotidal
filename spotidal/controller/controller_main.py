@@ -1,4 +1,5 @@
 import asyncio
+import csv
 import os
 import re
 import threading
@@ -21,7 +22,15 @@ from ..model.flac_to_mp3 import FlacToMp3
 from ..model.normalize_audio import NormalizeToFlac
 from ..model.library import MusicLibrary
 from ..model.rekordbox import RekordboxExport, RekordboxImport
-from ..webui.server import run_server as run_search_server
+from ..webui.server import (
+    run_server as run_search_server,
+    NOT_FOUND_REVIEW_CSV,
+    NOT_FOUND_REVIEW_FIELDS,
+    ALBUM_DIFF_REVIEW_CSV,
+    ALBUM_DIFF_REVIEW_FIELDS,
+    TIDAL_DIFF_REVIEW_CSV,
+    TIDAL_DIFF_REVIEW_FIELDS,
+)
 from ..model.library_watcher import LibraryWatcher
 from ..model.helpers.sync.playlists_handler import get_td_playlists_wrapper, get_tracks_from_sp_playlist
 from ..model.helpers.tidalapi import get_all_playlist_tracks
@@ -415,7 +424,24 @@ class ControllerMain:
             return
         sp_session = self.model.sessions["sp"]
         td_session = self.model.sessions["td"]
-        checked = flagged = not_found = 0
+        checked = flagged = album_diff = tidal_diff = not_found = 0
+
+        def _open_review_csv(path, fields):
+            path.parent.mkdir(parents=True, exist_ok=True)
+            handle = open(path, "w", newline="", encoding="utf-8")
+            writer = csv.DictWriter(handle, fieldnames=fields)
+            writer.writeheader()
+            return handle, writer
+
+        not_found_file, not_found_writer = _open_review_csv(
+            NOT_FOUND_REVIEW_CSV, NOT_FOUND_REVIEW_FIELDS
+        )
+        album_diff_file, album_diff_writer = _open_review_csv(
+            ALBUM_DIFF_REVIEW_CSV, ALBUM_DIFF_REVIEW_FIELDS
+        )
+        tidal_diff_file, tidal_diff_writer = _open_review_csv(
+            TIDAL_DIFF_REVIEW_CSV, TIDAL_DIFF_REVIEW_FIELDS
+        )
         for name in names:
             sp_id = self._library.get_playlist_spotify_id(name)
             if not sp_id:
@@ -431,32 +457,96 @@ class ControllerMain:
                 album = (track.get("album") or {}).get("name")
                 isrc = (track.get("external_ids") or {}).get("isrc")
 
-                local = self._library.find_track_by_isrc(isrc)
-                if not local:
-                    not_found += 1
-                    continue
-                checked += 1
-
                 def _clean(text):
                     return _normalize_for_match(_strip_diacritics(_strip_version_suffix(text)))
 
+                def _artists_of(name_or_names):
+                    return {
+                        _normalize_for_match(_strip_diacritics(a))
+                        for source in (
+                            [name_or_names] if isinstance(name_or_names, str) else name_or_names
+                        )
+                        for a in _split_artists(source)
+                    }
+
+                sp_artists = _artists_of(artists)
+
+                # ISRC alone is an unreliable key here: TIDAL and Spotify
+                # frequently carry different regional/release ISRCs for the
+                # same song, which is exactly why sync's own matcher
+                # (helpers/sync/match.py) never relies on ISRC alone either —
+                # it accepts a title+artist match as sufficient. Fall back to
+                # the same kind of match before concluding the track isn't
+                # in the library at all.
+                local = self._library.find_track_by_isrc(isrc)
+                if not local:
+                    clean_title = _clean(title)
+                    # SQL LIKE does literal substring matching, not
+                    # normalized comparison — a fragment that keeps
+                    # punctuation (e.g. "Feel Good Inc.") fails to match a
+                    # DB title lacking it ("Feel Good Inc"). The longest
+                    # pure-alphanumeric word is punctuation-free by
+                    # construction, so it survives that mismatch; the exact
+                    # comparison below still uses _clean() either way.
+                    words = re.findall(r"\w+", _strip_version_suffix(title))
+                    title_fragment = max(words, key=len) if words else title
+                    candidates = self._library.find_tracks_by_title_like(title_fragment)
+                    local = next(
+                        (
+                            c for c in candidates
+                            if _clean(c["title"]) == clean_title
+                            and _artists_of(c["artist"] or "") & sp_artists
+                        ),
+                        None,
+                    )
+                if not local:
+                    not_found += 1
+                    not_found_writer.writerow({
+                        "playlist": name, "spotify_id": track.get("id"),
+                        "title": title, "artist": artist, "album": album,
+                        "isrc": isrc,
+                    })
+                    continue
+                checked += 1
+
+                # The audit's review target is title/artist correctness —
+                # whether the right *song* is on file. Album divergence is
+                # expected and harmless on its own (Spotify often files a
+                # track under a "best of"/compilation while the library
+                # keeps the real original album, same as prefer_original_album
+                # already handles at download time), so it's tracked
+                # separately rather than mixed into "flagged".
+                title_mismatch = _clean(local["title"]) != _clean(title)
+                local_artists = _artists_of(local["artist"] or "")
+                artist_mismatch = bool(
+                    local_artists and sp_artists and not (local_artists & sp_artists)
+                )
+                album_mismatch = bool(
+                    local["album"] and album and _clean(local["album"]) != _clean(album)
+                )
+
                 mismatches = []
-                if _clean(local["title"]) != _clean(title):
+                if title_mismatch:
                     mismatches.append(f"title mismatch (db={local['title']!r} vs spotify={title!r})")
-                local_artists = {
-                    _normalize_for_match(_strip_diacritics(a))
-                    for name in [local["artist"] or ""]
-                    for a in _split_artists(name)
-                }
-                sp_artists = {
-                    _normalize_for_match(_strip_diacritics(a))
-                    for name in artists
-                    for a in _split_artists(name)
-                }
-                if local_artists and sp_artists and not (local_artists & sp_artists):
+                if artist_mismatch:
                     mismatches.append(f"artist mismatch (db={local['artist']!r} vs spotify={artist!r})")
-                if local["album"] and album and _clean(local["album"]) != _clean(album):
-                    mismatches.append(f"album mismatch (db={local['album']!r} vs spotify={album!r})")
+
+                if mismatches:
+                    self._library.set_review(local["track_id"], "; ".join(mismatches))
+                    flagged += 1
+                    continue
+
+                self._library.set_review(local["track_id"], None)
+
+                if album_mismatch:
+                    album_diff += 1
+                    album_diff_writer.writerow({
+                        "playlist": name, "spotify_id": track.get("id"),
+                        "title": title, "artist": artist,
+                        "db_album": local["album"], "spotify_album": album,
+                        "isrc": isrc,
+                    })
+                    continue
 
                 try:
                     # Only an exact ISRC match on the TIDAL candidate is
@@ -470,16 +560,22 @@ class ControllerMain:
                     candidates = results.get("tracks", [])
                     found = next((c for c in candidates if getattr(c, "isrc", None) == isrc), None)
                     if found and local["tidal_id"] and str(found.id) != str(local["tidal_id"]):
-                        mismatches.append(f"tidal_id mismatch (db={local['tidal_id']} vs found={found.id})")
+                        tidal_diff += 1
+                        tidal_diff_writer.writerow({
+                            "playlist": name, "spotify_id": track.get("id"),
+                            "title": title, "artist": artist,
+                            "db_tidal_id": local["tidal_id"], "found_tidal_id": found.id,
+                            "isrc": isrc,
+                        })
                 except Exception:
                     pass
-
-                self._library.set_review(local["track_id"], "; ".join(mismatches) if mismatches else None)
-                if mismatches:
-                    flagged += 1
+        not_found_file.close()
+        album_diff_file.close()
+        tidal_diff_file.close()
         print(t.log(
-            f"audit complete: {checked} checked, {flagged} flagged for review, "
-            f"{not_found} not found locally (isrc lookup failed)"
+            f"audit complete: {checked} checked, {flagged} flagged (title/artist), "
+            f"{album_diff} album differs, {tidal_diff} tidal_id differs, "
+            f"{not_found} not found locally — see 'explore library' > review"
         ))
 
     def resolve_playlist_name_from_url(self, url):
@@ -681,19 +777,21 @@ class ControllerMain:
         library = self._require_genre_library()
         return library.track_ids_for_playlists(names) if library else []
 
-    def export_rekordbox(self):
+    def export_rekordbox(self, names):
         if not self._require_database_and_library():
             return
         export = RekordboxExport(
             self._library.database_path, self._library.root_path
         )
         output = self._library.root_path / "rekordbox"
-        playlists = export.export_m3u8(output / "playlists")
-        xml = export.export_xml(output / "rekordbox.xml")
+        playlists = export.export_m3u8(output / "playlists", names=names)
+        xml = export.export_xml(output / "rekordbox.xml", names=names)
         print(t.log(
             f"exported {xml['playlists']} playlists / {xml['tracks']} tracks"
             f" to {output}"
         ))
+        if xml["backup"]:
+            print(t.log(f"backed up previous rekordbox.xml to {xml['backup']}"))
         if xml["skipped"]:
             print(t.warning(
                 "skipped (no local mp3): " + ", ".join(xml["skipped"])
@@ -701,7 +799,8 @@ class ControllerMain:
         print(t.log(
             "rekordbox: Preferences > Advanced > Database > rekordbox xml,"
             " point it at rekordbox.xml, then drag the Spotidal folder into"
-            " your playlists"
+            " your playlists (only drag playlists you haven't imported yet,"
+            " to avoid duplicate tracks in an already-imported playlist)"
         ))
         return {"m3u8": len(playlists["written"]), **xml}
 
@@ -723,7 +822,7 @@ class ControllerMain:
     def run_search_ui(self):
         if not self._require_database_and_library():
             return
-        run_search_server(self._library)
+        run_search_server(self._library, td_session=self.model.sessions.get("td"))
 
     def reset_sp_session(self):
         sp_credentials = view.setup_menu()

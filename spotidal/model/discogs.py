@@ -1,7 +1,7 @@
 import sqlite3
 from pathlib import Path
 
-from .genre import ApiUnavailable, BudgetExhausted, DiscogsClient
+from .genre import ApiUnavailable, BudgetExhausted, DiscogsClient, _is_various_artists
 from .helpers.type.file import Files
 from .library import _normalize_match_text, _now
 
@@ -80,7 +80,9 @@ class DiscogsTaxonomyFiller:
             for query in self._search_queries(album, title):
                 # Each variant gets its own cache key, so a cached miss on the
                 # raw "(Deluxe)" album does not hide a hit on the cleaned one.
-                cache_key = f"search:{_normalize_match_text(query)}||" \
+                # v2: bumped so cached hits from before the various-artists
+                # filter (which stored unfiltered matches) get re-fetched.
+                cache_key = f"search2:{_normalize_match_text(query)}||" \
                             f"{_normalize_match_text(first_artist)}"
                 cached = self._client.cached(cache_key)
                 if cached is not None:
@@ -88,8 +90,15 @@ class DiscogsTaxonomyFiller:
                 else:
                     matches = self._client.search_release(query, first_artist) or []
                     self._client.store(cache_key, {"matches": matches[:5]})
-                if matches:
-                    return matches[0]["id"], "album_search", 0.8
+                for match in matches:
+                    # Search-time filtering already drops compilations by
+                    # title/format, but a "Various Artists" credit only shows
+                    # up in the full release detail -- check before trusting
+                    # matches[0], or the harvested genre reflects the comp
+                    # instead of this artist's own release.
+                    detail = self._client.release_detail(match["id"])
+                    if detail and not _is_various_artists(detail):
+                        return match["id"], "album_search", 0.8
         isrc = (isrc or "").strip()
         if isrc:
             release_id = self._client.isrc_to_discogs(isrc)

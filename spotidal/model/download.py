@@ -179,12 +179,13 @@ class Download:
                 "pending_total": pending_total,
                 "start": job_start,
             }
-            for playlist_number, (playlist, tracks, total, skipped) in enumerate(playlists, 1):
+            to_download = [item for item in playlists if item[1]]
+            for playlist_number, (playlist, tracks, total, skipped) in enumerate(to_download, 1):
                 self._download_tidal_playlist(
                     playlist,
                     tracks,
                     playlist_number=playlist_number,
-                    playlist_total=len(playlists),
+                    playlist_total=len(to_download),
                     progress=progress,
                     total_tracks=total,
                     skipped_tracks=skipped,

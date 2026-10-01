@@ -113,6 +113,9 @@ def confirm_selection_menu():
     )
     return response
 
+def confirm_menu(message):
+    return ConfirmMenu().display(message)
+
 def selection_mode_menu(include_url=False, include_missing_tracks=False):
     print()
     selection_mode_menu = SelectionModeMenu()
