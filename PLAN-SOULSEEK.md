@@ -1,215 +1,224 @@
-# Feature Plan: Automated Soulseek Track Downloads
+# Feature Plan: Soulseek as an alternate download backend
 
 ## 1. Overview
 
-Build a service that searches Soulseek for tracks and automatically selects and queues files according to configurable quality, metadata, availability, and duplicate-detection rules.
+Add Soulseek (via the `slskd` REST API) as a second download backend alongside
+TIDAL, selectable per-track or per-playlist from the existing interactive menu.
+This is an extension of Spotidal, not a standalone tool: it uses the existing
+menu, the existing `Files`-based config, and the existing SQLite library
+schema. No new CLI, no new config file, no new database.
 
-**Primary integration:** `slskd` REST API  
-**Implementation language:** Python  
-**Initial scope:** Track search, candidate scoring, user review/automatic queueing, and download monitoring.
+**Primary integration:** `slskd` REST API (requires a locally running `slskd`
+instance — same category of external dependency as `ffmpeg` or
+`tidal-dl-ng`/`tidekeeper`; see AGENTS.md "Hard requirements").
+**Implementation language:** Python, using `requests` (already a dependency;
+no new HTTP client needed — `slskd`'s API is request/poll, not streaming).
+**Initial scope:** search, candidate scoring, manual/automatic selection,
+queueing, and transfer monitoring, wired into the existing `Download` flow.
 
-The system must only be used to download content the user is authorized to obtain. It should not bypass Soulseek access controls or platform limits.
+The system must only be used to download content the user is authorized to
+obtain. It must not bypass Soulseek access controls or platform limits.
 
 ## 2. Goals
 
-- Search for tracks using artist, title, album, and optional year.
-- Retrieve candidate files from Soulseek through `slskd`.
+- Search Soulseek (via `slskd`) using artist, title, album, and optional year.
 - Normalize and compare candidate metadata.
 - Apply hard filters and configurable ranking rules.
-- Support both automatic selection and manual approval.
-- Queue selected files and monitor transfer status.
-- Avoid downloading known duplicates.
-- Persist searches, decisions, and download history.
-- Make the selection logic testable independently of the Soulseek client.
+- Support manual approval and automatic selection modes.
+- Queue selected files through `slskd` and monitor transfer status.
+- Avoid re-downloading tracks already present in the local library
+  (reuse `MusicLibrary.available_track_ids()`, same check TIDAL downloads use).
+- Persist candidates/decisions/transfer state in the existing SQLite database.
+- Keep selection logic (filtering/scoring) testable independently of the
+  `slskd` client.
 
 ## 3. Non-goals for the MVP
 
 - Music recognition from audio fingerprints.
-- Automatic tagging or library management beyond basic metadata.
+- Automatic tagging beyond what the existing library indexer already does.
 - Sharing or uploading files.
 - Circumventing access controls, bans, or rate limits.
-- Guaranteeing that a file's actual audio quality matches its filename or advertised bitrate.
+- Guaranteeing that a file's actual audio quality matches its filename or
+  advertised bitrate.
+- A dedicated web UI for Soulseek (the existing `webui/` stays
+  library-search/DJ-suggestions only; Soulseek interaction stays in the
+  InquirerPy menu).
 
 ## 4. User stories
 
-1. As a user, I can submit a track (artist and title) and receive matching Soulseek results.
-2. As a user, I can configure accepted formats and minimum quality requirements.
-3. As a user, I can see why a candidate was accepted, rejected, or ranked above another.
-4. As a user, I can require approval before a download is queued.
-5. As a user, I can enable automatic queueing when a candidate meets strict rules.
-6. As a user, I can see queued, active, completed, and failed downloads.
-7. As a user, I can prevent re-downloading files already in my library.
-8. As a user, I can retry a failed search or transfer without losing its history.
+1. As a user, from the existing download menu, I can choose Soulseek instead
+   of TIDAL for a track or playlist.
+2. As a user, I can configure accepted formats and minimum quality in the
+   existing settings (`~/.config/spotidal/settings.json`).
+3. As a user, I can see why a candidate was accepted, rejected, or ranked
+   above another.
+4. As a user, I can require approval before a download is queued, or let
+   candidates above a score threshold queue automatically.
+5. As a user, I see queued/active/completed/failed Soulseek transfers in the
+   same place I already see TIDAL download progress.
+6. As a user, I don't re-download tracks already in my library.
+7. As a user, a Soulseek doctor check (mirroring the existing download
+   doctor) tells me if `slskd` is reachable before I try to use it.
 
-## 5. Proposed architecture
+## 5. How this fits the existing architecture
+
+Current flow (see `docs/agents/workflows.md`): `Download.by_td_id/by_url` →
+`_find_tidal_track()` match → `helpers/td_downloader.py` shells out to the
+`tidekeeper` binary → result tuple parsed back in `download.py` →
+`MusicLibrary` updated.
+
+`Download` has no backend abstraction today — everything assumes TIDAL and a
+subprocess-based downloader. This plan introduces a minimal seam rather than
+a parallel system:
 
 ```text
-CLI / Web UI
+ControllerMain.download()/download_url()
     |
     v
-Application service
-    |---- Search service ------> slskd REST API ------> Soulseek network
-    |---- Candidate evaluator
-    |---- Selection policy
-    |---- Download queue ------> slskd REST API
-    |---- Transfer monitor ----> slskd REST API
+Download  (spotidal/model/download.py)
+    |-- backend = settings.downloadBackend  ("tidal" | "soulseek", per call or default)
     |
-    v
-SQLite (MVP) / PostgreSQL (later)
+    |-- TIDAL path (existing, unchanged): helpers/td_downloader.py -> tidekeeper subprocess
+    |
+    '-- Soulseek path (new): helpers/soulseek_downloader.py -> slskd REST client
+            |-- search        -> slskd /api/v0/searches
+            |-- candidates    -> normalize + filter + score
+            |-- queue_download -> slskd /api/v0/transfers/downloads/{username}
+            '-- poll transfer -> slskd /api/v0/transfers/downloads
 ```
 
-### Components
+### Components (new files, following existing module layout)
 
-- **Client:** Typed wrapper around the `slskd` REST API; handles authentication, timeouts, retries, and response validation.
-- **Search service:** Submits search terms and collects results until a configured timeout or result limit.
-- **Normalizer:** Extracts and normalizes artist, title, album, extension, bitrate, duration, size, username, and availability where provided.
-- **Evaluator:** Applies hard filters and computes a transparent score.
-- **Queue manager:** Adds approved candidates to the `slskd` download queue and records returned identifiers.
-- **Monitor:** Polls transfer state and updates local records.
-- **Persistence:** Stores configuration, searches, candidates, decisions, and download state.
-- **Interface:** Start with a CLI; keep application logic independent so a web UI can be added later.
+- `spotidal/model/helpers/slskd_client.py` — thin `requests`-based wrapper
+  around the `slskd` REST API: auth header, timeouts, bounded retries on
+  transient failures. No new dependency; mirrors how `discogs.py` and
+  `genre.py` already wrap external HTTP APIs with `requests`.
+- `spotidal/model/helpers/soulseek_selection.py` — pure functions: hard
+  filters, scoring, tie-breaking. No I/O, so it's unit-testable without a
+  running `slskd` or network access — this is the one place genuinely worth
+  automated tests given "no tests" is otherwise the project norm
+  (AGENTS.md "Verifying changes").
+- `spotidal/model/helpers/soulseek_downloader.py` — orchestrates
+  search → filter/score → (approve) → queue → poll, called from `Download`
+  the same way `td_downloader.download_url()` is called today. Produces a
+  result shape compatible with what `download.py` already expects, or
+  `download.py`'s per-track loop is adjusted to branch on backend before
+  interpreting the result (small, local change — not a full rewrite of
+  `Download`).
 
 ## 6. Selection workflow
 
-1. Validate the requested track and user configuration.
-2. Check the local library for an existing match.
-3. Submit a search through `slskd`.
-4. Collect candidate results.
-5. Normalize candidate fields.
-6. Apply hard rejection rules.
-7. Score the remaining candidates.
-8. Sort by score, then apply deterministic tie-breakers.
-9. In approval mode, present the ranked candidates and reasons.
-10. In automatic mode, queue the highest-ranked candidate that meets the configured threshold.
-11. Monitor the transfer and record its final state.
-12. Optionally validate the downloaded file and update the local library index.
+1. Check the local library for an existing match
+   (`MusicLibrary.available_track_ids()` — reused, not reimplemented).
+2. Submit a search through `slskd`.
+3. Collect candidate results (bounded by configured timeout/result limit).
+4. Normalize candidate fields (artist, title, extension, bitrate, duration,
+   size, username, availability).
+5. Apply hard rejection rules.
+6. Score remaining candidates.
+7. Sort by score, then deterministic tie-breakers.
+8. Manual mode: present ranked candidates with reasons via InquirerPy,
+   same interaction pattern as existing match-review prompts in
+   `spotidal/view/prompt.py`.
+9. Automatic mode: queue the highest-ranked candidate meeting the threshold.
+10. Poll transfer state until terminal; update the download record.
+11. On completion, run the file through the same post-download step TIDAL
+    downloads use today (library indexing) — no separate "LibraryFile" model.
 
 ### Hard filters
 
-Hard filters should reject a candidate regardless of score. Examples:
-
-- Unsupported or disallowed file extension.
-- MP3 bitrate below the configured minimum, when bitrate is available.
+- Unsupported/disallowed file extension.
+- MP3 bitrate below configured minimum, when bitrate is available.
 - File size outside configured bounds.
-- Duration outside configured bounds, when duration is available.
-- Exact duplicate already present.
-- Missing required metadata, if the policy requires it.
+- Duration outside configured bounds, when duration is available (compare
+  against the Spotify track's known duration, already available at request
+  time — this project already has it, unlike a from-scratch tool).
+- Exact duplicate already present in the library.
+- Missing required metadata, if policy requires it.
 
-Missing metadata should be handled explicitly: reject, allow with a penalty, or require manual approval. Do not silently treat unknown values as passing.
+Missing metadata is handled explicitly per `unknown_metadata_policy`: reject,
+allow with penalty, or require manual approval. Never silently pass unknowns.
 
 ### Ranking
 
-Use a configurable weighted score. Suggested MVP signals:
-
 | Signal | Example weight | Notes |
 |---|---:|---|
-| Exact artist/title match | 30 | Compare normalized text; avoid relying on filename alone |
-| Preferred format | 25 | Example: FLAC preferred over lossy formats |
-| Quality metadata | 20 | Only score bitrate/sample rate when available and meaningful |
-| Album/year match | 10 | Optional; should not block single-track searches unless configured |
-| Availability | 10 | Prefer candidates reported as available/online |
-| Transfer speed | 5 | Use only if a reliable estimate is exposed |
+| Exact artist/title match | 30 | Normalized text compare, not filename-only |
+| Preferred format | 25 | e.g. FLAC preferred over lossy |
+| Quality metadata | 20 | Only when bitrate/sample rate present and meaningful |
+| Album/year match | 10 | Optional; shouldn't block single-track searches |
+| Availability | 10 | Prefer candidates reported online |
+| Transfer speed | 5 | Only if `slskd` exposes a reliable estimate |
 
-Weights are starting defaults, not a universal quality metric. Normalize or cap each signal so the total is predictable. Expose the score breakdown to the user.
+Weights are configurable starting defaults. Normalize/cap so the total is
+predictable, and surface the score breakdown to the user.
 
-**Tie-breakers:** exact metadata match, preferred format, known duration, availability, then stable lexical ordering. Do not use arbitrary randomness.
+**Tie-breakers:** exact metadata match, preferred format, known duration,
+availability, then stable lexical ordering. No randomness.
 
 ## 7. Configuration
 
-Example YAML configuration:
+Extend the existing `settings.json` (via the `Files` enum — no new config
+file, per AGENTS.md "never invent a new state path"):
 
-```yaml
-soulseek:
-  base_url: "http://localhost:5030"
-  # Load API key from an environment variable or secret store.
-  api_key_env: "SLSKD_API_KEY"
-
-search:
-  timeout_seconds: 30
-  max_results: 100
-
-selection:
-  mode: "manual" # manual | automatic
-  minimum_score: 70
-  allowed_formats: ["flac", "mp3"]
-  preferred_format_order: ["flac", "mp3"]
-  minimum_mp3_bitrate: 320
-  min_size_mb: 1
-  max_size_mb: 150
-  duration_tolerance_seconds: 8
-  unknown_metadata_policy: "manual_review"
-
-downloads:
-  max_concurrent: 2
-  destination: "./downloads"
-  skip_existing: true
+```json
+{
+  "downloadBackend": "tidal",
+  "soulseek": {
+    "baseUrl": "http://localhost:5030",
+    "apiKeyEnv": "SLSKD_API_KEY",
+    "searchTimeoutSeconds": 30,
+    "maxResults": 100,
+    "selectionMode": "manual",
+    "minimumScore": 70,
+    "allowedFormats": ["flac", "mp3"],
+    "preferredFormatOrder": ["flac", "mp3"],
+    "minimumMp3Bitrate": 320,
+    "minSizeMb": 1,
+    "maxSizeMb": 150,
+    "durationToleranceSeconds": 8,
+    "unknownMetadataPolicy": "manual_review",
+    "maxConcurrentDownloads": 2
+  }
+}
 ```
 
-Validate configuration at startup. Keep credentials out of source control and logs.
+The `slskd` API key is read from an environment variable
+(`SLSKD_API_KEY`), never written into `settings.json` or logged — same rule
+already in place for TIDAL/Spotify credentials (`credentials.yml` is
+never read/printed/committed per AGENTS.md). Validate config at startup;
+surface a clear error if `slskd` is unreachable rather than failing deep in
+the download loop.
 
-## 8. Data model
+## 8. Data model changes
 
-### TrackRequest
-- `id`
-- `artist`
-- `title`
-- `album` (optional)
-- `year` (optional)
-- `expected_duration_seconds` (optional)
-- `created_at`
-- `status`
+Extend the existing schema additively (per `docs/agents/data-model.md`'s
+migration convention — `CREATE TABLE IF NOT EXISTS` / tracked migrations),
+no parallel library model:
 
-### Search
-- `id`
-- `track_request_id`
-- `query`
-- `started_at`
-- `completed_at`
-- `status`
-- `result_count`
+- `files.source` (nullable TEXT, e.g. `"tidal"` / `"soulseek"`) — which
+  backend produced the file. Mirrors the pattern already used by
+  `harvest_log.source` for metadata harvesting.
+- New table `soulseek_candidates` (or similar): one row per search result
+  considered for a track — `track_id`, `username`, `remote_path`, `filename`,
+  `extension`, `size_bytes`, `bitrate`, `duration_seconds`, `availability`,
+  `score`, `score_breakdown` (JSON), `rejection_reasons` (JSON), `selected`,
+  `slskd_transfer_id`, `status`, `started_at`, `completed_at`, `error`.
+  This is the one genuinely new table — existing `tracks`/`files` have no
+  slot for per-candidate search/transfer bookkeeping, and that history is
+  worth keeping for retry/debugging. Foreign key to `tracks.track_id`.
 
-### Candidate
-- `id`
-- `search_id`
-- `username`
-- `remote_path`
-- `filename`
-- `extension`
-- `size_bytes`
-- `bitrate` (nullable)
-- `duration_seconds` (nullable)
-- `availability` (nullable)
-- `speed_estimate` (nullable)
-- `score`
-- `score_breakdown` (JSON)
-- `rejection_reasons` (JSON)
-- `selected` (boolean)
+No separate `TrackRequest`/`Search`/`Download`/`LibraryFile` tables — those
+collapse into the existing `tracks`/`files` tables plus the one new
+`soulseek_candidates` table above.
 
-### Download
-- `id`
-- `candidate_id`
-- `slskd_transfer_id`
-- `status`
-- `destination`
-- `started_at`
-- `completed_at`
-- `error`
+## 9. `slskd` client requirements
 
-### LibraryFile
-- `id`
-- `path`
-- `size_bytes`
-- `artist` (nullable)
-- `title` (nullable)
-- `duration_seconds` (nullable)
-- `content_hash` (nullable)
-- `indexed_at`
+Use `slskd`'s own API documentation for exact endpoint paths/payloads; do not
+hard-code assumptions from examples found online — confirm during
+implementation (M0 below).
 
-## 9. API and integration requirements
-
-Use the `slskd` API documentation for exact endpoint paths and payloads; do not hard-code assumptions from examples found online.
-
-The adapter should provide application-level methods such as:
+Adapter methods (`slskd_client.py`):
 
 - `search(query) -> SearchHandle`
 - `get_search_results(search_id) -> list[Candidate]`
@@ -218,146 +227,132 @@ The adapter should provide application-level methods such as:
 - `cancel_transfer(transfer_id)`
 
 Requirements:
-- Keep API-specific response models inside the adapter.
-- Set connection and request timeouts.
+- Keep `slskd`-specific response shapes inside this module only.
+- Set connection and request timeouts (`requests` supports this directly).
 - Retry transient failures with bounded exponential backoff.
-- Avoid duplicate queue submissions on retry; use idempotency checks in the application layer.
-- Handle expired searches, unavailable users, rejected transfers, and API errors.
-- Confirm current `slskd` authentication and API behavior during implementation.
+- Avoid duplicate queue submissions on retry — idempotency check in
+  `soulseek_downloader.py` before calling `queue_download`.
+- Handle expired searches, unavailable users, rejected transfers, API errors.
 
 ## 10. Duplicate detection
 
-Use layered matching:
+1. Exact normalized artist + title + duration (when available) against
+   `MusicLibrary` — same check already used before any TIDAL download starts.
+2. Existing file path/size checks.
+3. Optional content hash after download (future enhancement, not MVP).
 
-1. Exact normalized artist + title + duration (when available).
-2. Existing file path and size checks.
-3. Optional content hash after download.
-4. Optional audio fingerprinting as a future enhancement.
-
-Do not assume equal filenames mean equal audio, or different filenames mean different audio. Make duplicate decisions auditable and allow manual override.
+Do not assume equal filenames mean equal audio, or different filenames mean
+different audio. Keep duplicate decisions auditable; allow manual override.
 
 ## 11. User interface
 
-### MVP CLI commands
+No new CLI and no new web UI. Soulseek is reached through the existing
+InquirerPy menu (`spotidal/controller/controller.py`):
 
-```text
-soulseek search "Artist" "Track"
-soulseek queue <candidate-id>
-soulseek downloads
-soulseek config validate
-soulseek library scan ./music
-```
-
-Search output should show:
-- Filename and remote username
-- Format, size, bitrate, and duration when known
-- Availability and speed estimate when known
-- Score and score breakdown
-- Rejection reasons
-- Whether the item is already in the library
-
-### Later web UI
-
-- Search form and candidate table
-- Filters for format, quality, size, and duration
-- Candidate comparison and approval
-- Download queue with progress and error details
-- Configuration editor with validation
+- Add a backend choice where the user currently triggers a TIDAL download
+  (or a settings toggle for a default backend, with override per action) —
+  follow the existing `MainMenu` dispatch pattern.
+  `ControllerMain.download()`/`download_url()` gain a backend branch.
+- Candidate review (manual mode) reuses the existing match-review prompt
+  style in `spotidal/view/prompt.py`: filename, username, format, size,
+  bitrate, duration, availability, score + breakdown, rejection reasons,
+  "already in library" flag.
+- Transfer status shown via the same progress/log style used for TIDAL
+  downloads today (`controller_main.py` download progress plumbing).
+- `view` still never imports from `model` — Soulseek menu strings/choices
+  stay plain data, same as every other menu.
 
 ## 12. Error handling and observability
 
-- Distinguish no results, API failure, timeout, rejected transfer, and local filesystem error.
-- Persist state transitions.
-- Log request identifiers and internal IDs, but never API keys.
-- Use structured logs.
-- Prevent a temporary API outage from marking a download as permanently failed.
-- Provide a clear retry action for recoverable failures.
+- Distinguish no results, API failure, timeout, rejected transfer, local
+  filesystem error.
+- Persist state transitions in `soulseek_candidates`.
+- Never log the `slskd` API key.
+- A temporary `slskd` outage must not mark a download as permanently failed —
+  surface it as retryable, consistent with how `TidalSessionStaleError` is
+  already handled as recoverable in `td_downloader.py`.
 
 ## 13. Security and privacy
 
-- Store the `slskd` API key in an environment variable or secret store.
-- Bind the `slskd` service to localhost or a trusted network unless remote access is explicitly secured.
-- Do not expose credentials in CLI output, logs, or error messages.
-- Validate destination paths and prevent path traversal.
-- Restrict file operations to configured download/library directories.
-- Respect copyright, applicable law, and Soulseek/slskd terms.
+- `slskd` API key stays in an environment variable, never in `settings.json`
+  or logs.
+- Assume `slskd` is bound to localhost/trusted network; don't add remote
+  exposure as part of this feature.
+- Validate destination paths; restrict file operations to the configured
+  `downloadPath`, same boundary TIDAL downloads already respect.
+- Respect copyright, applicable law, and Soulseek/`slskd` terms.
 
 ## 14. Testing strategy
 
-### Unit tests
-- Filename and metadata normalization.
-- Hard-filter behavior, including missing metadata.
-- Score calculation and tie-breaking.
-- Duplicate detection.
-- Configuration validation.
-- Destination path validation.
+Given this project has no test suite or CI today (AGENTS.md "Verifying
+changes"), keep automated tests scoped to the one pure-logic module:
 
-### Integration tests
-- Mock `slskd` API responses for searches and transfers.
-- Verify API errors, timeouts, retries, and malformed responses.
-- Verify that a candidate is queued only once.
-- Verify transfer state updates.
+- Unit tests for `soulseek_selection.py`: normalization, hard filters
+  (including missing-metadata handling), scoring, tie-breaking, duplicate
+  detection — this logic has no I/O and is cheap to test in isolation.
+- No mocked-API integration test suite for MVP (out of step with the rest of
+  the codebase); instead, manual acceptance testing against a real local
+  `slskd` instance, same verification style already used for
+  `poetry run spotidal doctor all`.
 
-### Manual acceptance tests
-- Search for a known test track.
-- Compare several candidate results.
-- Confirm rejection reasons are visible.
-- Queue a candidate in manual mode.
+### Manual acceptance checklist
+
+- Search for a known test track end-to-end through the menu.
+- Compare several candidate results; confirm rejection reasons are visible.
+- Queue a candidate in manual mode; confirm it appears in library after
+  completion.
 - Run automatic mode with a strict score threshold.
-- Confirm completed and failed transfers are represented correctly.
-- Confirm an existing library file is not queued again.
+- Confirm an existing library file is not re-queued.
+- Kill `slskd` mid-download; confirm the failure is surfaced as retryable,
+  not a silent hang (same bar as the stuck-at-N% fix already made for
+  TIDAL downloads).
 
 ## 15. Milestones
 
-### M0 — Repository and integration spike
-- [ ] Confirm `slskd` installation and API version.
-- [ ] Verify authentication and basic search flow.
-- [ ] Capture representative result and transfer payloads.
-- [ ] Decide supported runtime and packaging.
+### M0 — Integration spike
+- [ ] Confirm `slskd` installation/API version; document it in AGENTS.md's
+      "Hard requirements" section alongside `tidekeeper`/`ffmpeg`.
+- [ ] Verify authentication and a basic search round-trip.
+- [ ] Capture representative search-result and transfer payloads.
 
-### M1 — Search MVP
-- [ ] Create project structure and configuration.
-- [ ] Implement typed `slskd` client.
-- [ ] Implement search submission and result collection.
-- [ ] Normalize candidate metadata.
-- [ ] Add CLI search output.
+### M1 — Client and selection logic
+- [ ] `slskd_client.py`: search, results, queue, transfer status, cancel.
+- [ ] `soulseek_selection.py`: normalization, hard filters, scoring,
+      tie-breaking — with unit tests.
+- [ ] `files.source` column + `soulseek_candidates` table (additive
+      migration).
 
-### M2 — Selection engine
-- [ ] Implement hard filters.
-- [ ] Implement configurable scoring.
-- [ ] Add deterministic tie-breaking.
-- [ ] Show score breakdown and rejection reasons.
-- [ ] Add unit tests for policy behavior.
+### M2 — Wire into `Download`
+- [ ] `soulseek_downloader.py` orchestrating search → filter/score → queue →
+      poll.
+- [ ] Backend branch in `Download`/`ControllerMain.download()`.
+- [ ] Manual-mode candidate review via existing prompt patterns.
+- [ ] Settings: `downloadBackend` + `soulseek.*` block in `settings.json`.
 
-### M3 — Download queue
-- [ ] Implement manual candidate approval.
-- [ ] Queue selected candidate through `slskd`.
-- [ ] Persist transfer identifiers and state.
-- [ ] Add duplicate queue protection.
-- [ ] Add CLI download status and cancellation.
-
-### M4 — Automatic mode and library checks
-- [ ] Implement automatic selection threshold.
-- [ ] Add library scan and duplicate checks.
-- [ ] Define behavior for unknown metadata.
-- [ ] Add retry and recovery behavior.
-- [ ] Add end-to-end acceptance tests.
-
-### M5 — Hardening and optional UI
-- [ ] Improve structured logging and diagnostics.
-- [ ] Review security and path handling.
-- [ ] Add packaging and deployment documentation.
-- [ ] Evaluate whether a web UI is needed.
+### M3 — Automatic mode and hardening
+- [ ] Automatic selection threshold.
+- [ ] Duplicate-queue protection, retry/recovery for transient `slskd`
+      failures.
+- [ ] Soulseek doctor check (reachability) mirroring the existing download
+      doctor.
+- [ ] Update `docs/agents/workflows.md`, `architecture.md`, `status.md`.
 
 ## 16. Definition of done
 
-The MVP is complete when a user can submit a track, retrieve candidates, understand why each candidate was ranked or rejected, approve or automatically select a qualifying candidate, queue it through `slskd`, and observe the transfer state. The process must avoid duplicate queue submissions, handle expected API failures, and have automated tests for selection rules.
+A user can, from the existing menu, choose Soulseek for a track, review
+ranked candidates with visible reasons, approve or auto-select one, have it
+queued and monitored through `slskd`, and see it land in the library exactly
+like a TIDAL download — without a second CLI, a second config file, or a
+second database. Selection logic has unit tests; everything else is verified
+manually against a real `slskd` instance, consistent with how the rest of
+Spotidal is verified today.
 
 ## 17. Open questions
 
-- Should the first interface be CLI-only or include a web UI?
-- Is the target deployment macOS, Windows, Linux, or Docker?
-- Should FLAC always outrank MP3, or should the user define format preferences per request?
-- Should unknown bitrate/duration trigger rejection or manual review?
-- Should automatic mode queue one candidate or fall back to the next candidate after a transfer failure?
-- Should the system manage a music library, or only download into a destination folder?
+- Per-action backend choice, or a single default with override?
+- Should FLAC always outrank MP3, or is format preference per-request
+  configurable?
+- Should unknown bitrate/duration trigger rejection or manual review by
+  default?
+- Should automatic mode fall back to the next candidate after a transfer
+  failure, or stop and surface the failure?
