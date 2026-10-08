@@ -124,6 +124,20 @@ CREATE TABLE IF NOT EXISTS rym_release_genre (
     kind TEXT NOT NULL CHECK (kind IN ('primary', 'secondary', 'descriptor')),
     UNIQUE (rym_release_id, name, kind)
 );
+CREATE TABLE IF NOT EXISTS soulseek_candidates (
+    soulseek_candidate_id INTEGER PRIMARY KEY,
+    track_id TEXT NOT NULL REFERENCES tracks(track_id),
+    username TEXT NOT NULL, remote_path TEXT NOT NULL, filename TEXT NOT NULL,
+    extension TEXT, size_bytes INTEGER, bitrate INTEGER, duration_seconds INTEGER,
+    availability INTEGER, speed_estimate REAL,
+    score REAL, score_breakdown TEXT, rejection_reasons TEXT,
+    selected INTEGER NOT NULL DEFAULT 0,
+    slskd_transfer_id TEXT, status TEXT NOT NULL DEFAULT 'pending', error TEXT,
+    started_at TEXT, completed_at TEXT,
+    created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_soulseek_candidates_track
+    ON soulseek_candidates(track_id);
 """
 
 FINAL_GENRE_SEED = [
@@ -259,6 +273,10 @@ class MusicLibrary:
             }
             if "missing_at" not in columns:
                 connection.execute("ALTER TABLE files ADD COLUMN missing_at TEXT")
+            if "source" not in columns:
+                connection.execute(
+                    "ALTER TABLE files ADD COLUMN source TEXT NOT NULL DEFAULT 'tidal'"
+                )
             track_columns = {
                 row[1] for row in connection.execute("PRAGMA table_info(tracks)")
             }
@@ -397,6 +415,10 @@ class MusicLibrary:
             )
             connection.execute(
                 "INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES(9, ?)",
+                (_now(),),
+            )
+            connection.execute(
+                "INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES(10, ?)",
                 (_now(),),
             )
 
@@ -655,12 +677,54 @@ class MusicLibrary:
             "album": row[3], "spotify_id": row[4], "tidal_id": row[5],
         }
 
+    def find_tracks_by_title_like(self, title_fragment, limit=50):
+        """Fallback lookup for when ISRC matching fails (see
+        audit_playlist_consistency): broad candidates by title substring,
+        for the caller to narrow down with its own title+artist matching.
+
+        Ordered by title length so a short/common fragment (e.g. "One")
+        surfaces its exact-length match first, instead of that row being
+        arbitrarily cut off by `limit` behind hundreds of longer titles
+        that merely contain the same substring.
+        """
+        if not title_fragment:
+            return []
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT track_id, title, artist, album, spotify_id, tidal_id "
+                "FROM tracks WHERE title LIKE ? ORDER BY LENGTH(title) ASC LIMIT ?",
+                (f"%{title_fragment}%", limit),
+            ).fetchall()
+        return [
+            {
+                "track_id": row[0], "title": row[1], "artist": row[2],
+                "album": row[3], "spotify_id": row[4], "tidal_id": row[5],
+            }
+            for row in rows
+        ]
+
     def set_review(self, track_id, reason):
         with self._connect() as connection:
             connection.execute(
                 "UPDATE tracks SET review_reason=?, reviewed_at=? WHERE track_id=?",
                 (reason, _now(), track_id),
             )
+
+    def flagged_tracks(self):
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT track_id, title, artist, album, isrc, tidal_id, "
+                "review_reason, reviewed_at FROM tracks "
+                "WHERE review_reason IS NOT NULL ORDER BY reviewed_at DESC"
+            ).fetchall()
+        return [
+            {
+                "track_id": row[0], "title": row[1], "artist": row[2],
+                "album": row[3], "isrc": row[4], "tidal_id": row[5],
+                "review_reason": row[6], "reviewed_at": row[7],
+            }
+            for row in rows
+        ]
 
     def genre_scan_rows(self, track_ids=None):
         with self._connect() as connection:
@@ -1181,6 +1245,91 @@ class MusicLibrary:
                 "INSERT OR IGNORE INTO playlist_tracks(playlist_id,track_id) VALUES(?,?)",
                 [(playlist_id, track_id) for track_id in set(track_ids)],
             )
+
+    def replace_playlist_tracks(self, playlist_id, track_ids):
+        """Make playlist_tracks membership match `track_ids` exactly.
+
+        Used by the Spotify->DB sync so tracks removed from the live
+        Spotify playlist also drop out of the local membership, instead of
+        only ever accumulating (as plain add_playlist_tracks would).
+        """
+        track_ids = set(track_ids)
+        with self._connect() as connection:
+            existing = {
+                row[0] for row in connection.execute(
+                    "SELECT track_id FROM playlist_tracks WHERE playlist_id = ?",
+                    (playlist_id,),
+                ).fetchall()
+            }
+            to_remove = existing - track_ids
+            if to_remove:
+                connection.executemany(
+                    "DELETE FROM playlist_tracks WHERE playlist_id = ? AND track_id = ?",
+                    [(playlist_id, track_id) for track_id in to_remove],
+                )
+            connection.executemany(
+                "INSERT OR IGNORE INTO playlist_tracks(playlist_id,track_id) VALUES(?,?)",
+                [(playlist_id, track_id) for track_id in track_ids],
+            )
+        return {"added": len(track_ids - existing), "removed": len(to_remove)}
+
+    def upsert_track_from_spotify(self, title, artist, album, isrc, spotify_id):
+        """Create (or update identifying fields on) a track row sourced from
+        a live Spotify playlist, with no local file yet. This is the only
+        way a track discovered in Spotify but entirely absent from the
+        database gets a track_id to hang playlist membership off of.
+        """
+        now = _now()
+        with self._connect() as connection:
+            track_id = None
+            if isrc:
+                row = connection.execute(
+                    "SELECT track_id FROM tracks WHERE isrc = ?", (isrc,)
+                ).fetchone()
+                track_id = row[0] if row else None
+            if not track_id and spotify_id:
+                row = connection.execute(
+                    "SELECT track_id FROM tracks WHERE spotify_id = ?", (spotify_id,)
+                ).fetchone()
+                track_id = row[0] if row else None
+            if track_id:
+                connection.execute(
+                    "UPDATE tracks SET title=?, artist=?, album=COALESCE(?, album), "
+                    "isrc=COALESCE(?, isrc), spotify_id=COALESCE(?, spotify_id), "
+                    "updated_at=? WHERE track_id=?",
+                    (title, artist, album, isrc, spotify_id, now, track_id),
+                )
+                return track_id
+            track_id = uuid7()
+            connection.execute(
+                "INSERT INTO tracks(track_id,title,artist,album,isrc,spotify_id,created_at,updated_at) "
+                "VALUES(?,?,?,?,?,?,?,?)",
+                (track_id, title, artist, album, isrc, spotify_id, now, now),
+            )
+        return track_id
+
+    def missing_downloads_for_playlists(self, names):
+        """Tracks in the given playlists (by current DB membership) with no
+        local file on disk, backend-agnostic (any `files` row counts,
+        regardless of whether it came from TIDAL or Soulseek).
+        """
+        if not names:
+            return []
+        placeholders = ",".join("?" for _ in names)
+        with self._connect() as connection:
+            return connection.execute(
+                f"SELECT DISTINCT p.name, t.track_id, t.title, t.artist, t.album, "
+                "t.isrc, t.spotify_id, t.tidal_id "
+                "FROM playlists p "
+                "JOIN playlist_tracks pt ON pt.playlist_id = p.playlist_id "
+                "JOIN tracks t ON t.track_id = pt.track_id "
+                "WHERE p.name IN "
+                f"({placeholders}) AND NOT EXISTS ("
+                "  SELECT 1 FROM files f WHERE f.track_id = t.track_id "
+                "  AND f.missing_at IS NULL"
+                ") ORDER BY p.name, t.title COLLATE NOCASE",
+                list(names),
+            ).fetchall()
 
     def mark_missing(self, location_id, path):
         with self._connect() as connection:

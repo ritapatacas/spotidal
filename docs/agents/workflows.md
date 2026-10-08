@@ -22,6 +22,18 @@ the controller and download layers. So a change in matching behaviour will not s
 in the database unless the caller also persists it. Tracks that fail to match TIDAL are
 the ones most likely to be lost — they have no TIDAL id to persist by.
 
+**MusicBrainz cost.** `td_search()` (`helpers/sync/search.py`) asks MusicBrainz whether
+a track's Spotify-reported album is a compilation/reissue of a genuine original studio
+album — but only *after* a TIDAL match is already found (`spotify_result`), not
+unconditionally. MusicBrainz's public API is rate-limited to ~1 req/s **process-wide**
+(a single `threading.Lock` in `helpers/sync/musicbrainz.py`, shared across every
+concurrent search task regardless of `max_concurrency`), so calling it for every track
+serializes a first-time sync of a large playlist to many minutes of near-zero visible
+progress — this happened in practice on a ~1400-track playlist. Don't move this call
+back above the TIDAL search without re-checking that math. `search_new_tracks_on_td()`
+logs one `found: <title> — <artist> -> ...` / `not found: <title> — <artist>` line per
+track via `tqdm.write` as each completes.
+
 ## 2. Download
 
 ```
@@ -38,6 +50,10 @@ Notes:
 
 - Downloads are batched (`batchSize`, `parallelBatches` in settings) with a `tqdm`
   subclass, `DownloadProgress`, for per-track percentage.
+- `by_td_ids()` fetches/prepares every selected playlist first (unavoidable — that's
+  how it learns what's pending), but its per-playlist progress loop only visits
+  playlists that actually have pending tracks; a playlist with 0 to download no
+  longer gets a header line and a wasted "playlist N/M" step.
 - A stale TIDAL session surfaces as `TidalSessionStaleError` from `td_downloader`; the
   controller catches it and routes to `Model.refresh_td_session()`, which refreshes the
   token or falls back to an interactive tidekeeper login.
@@ -65,6 +81,69 @@ accumulates results and decides the process exit code. Add new checks as
 `_ffprobe_stream_info()` is the shared ffprobe wrapper: it uses `subprocess` with
 separate arguments, a timeout, and JSON output. Reuse it rather than parsing ffprobe
 text.
+
+`run_download_doctor` also runs a `tmp cleanup` step first (the same
+`clean_tmp()` + `purge_temp_artifacts()` as the standalone `clean tmp files` menu
+item), before the tidekeeper/token/db/test-download checks — added so the one-click
+"is the pipeline healthy" doctor doesn't need a separate manual cleanup pass first.
+
+`utils > doctors > playlists doctors` wraps `run_playlists_doctor` in
+`Controller._playlists_doctor()` (`controller.py`): after the read-only DB audit, if
+the saved default selection is non-empty it offers to refresh those playlists from
+TIDAL right there (`ControllerMain.get_selection_stats(force_refresh=True)`) — audit
+and fix in one action, folding in what used to be the separate "watch playlist files"
+step for this common case. `watch playlist files` still exists standalone
+(`utils > doctors > database doctors`) for an ad-hoc selection not tied to the saved
+default.
+
+### Don't conflate these three "is my library complete" checks
+
+They compare different pairs of things and give very different numbers for the same
+playlist — this caused real confusion in practice (0 missing from one, hundreds "not
+found" from another, on the same playlist, same session):
+
+| Check | Compares | Blind to |
+| --- | --- | --- |
+| `run_missing_tracks_doctor` (`missing tracks doctor`) | **TIDAL playlist mirror** vs local files | Spotify tracks never matched into the TIDAL mirror at all — they're not "missing", they're just never seen |
+| `get_selection_stats` (the `tracks/local/missing` table — `view selection`, `refresh selection stats`, and printed after most doctor/refresh actions) | Same as above: **TIDAL playlist** (`total`) vs local files matched (`local`) | Same blind spot — `total` is never the Spotify track count |
+| `audit_playlist_consistency` (`audit playlist consistency`) | The **live Spotify playlist** vs the local DB, matched primarily by ISRC with a title+artist fallback | Nothing upstream — this is the only one of the three that ever asks Spotify directly |
+
+A `sync` that gets interrupted (or that fails to match a track at all — see the
+MusicBrainz note above) leaves the TIDAL mirror short of the Spotify playlist. The
+first two checks won't notice; only `audit_playlist_consistency`'s "not found" bucket
+will. If `missing_tracks_doctor` says 0 missing but the audit says otherwise, re-sync
+the playlist (not "download missing" — that only ever acts on what's already in the
+TIDAL mirror) and check again.
+
+### The playlist-consistency audit's output
+
+`ControllerMain.audit_playlist_consistency(names)` fetches each playlist fresh from
+Spotify and classifies every track into exactly one bucket:
+
+1. **Flagged** — title or artist differs from the local DB row. The audit's actual
+   review target. Written to `tracks.review_reason` (`MusicLibrary.set_review`);
+   cleared automatically on a later run if the track no longer qualifies.
+2. **Album differs** — title and artist match, only the album diverges. Deliberately
+   *not* flagged: Spotify often files a track under a "best of"/compilation while the
+   library keeps the real original album (the same divergence `prefer_original_album`
+   already handles at download time), so this is expected and not a review target.
+   Written to `~/.config/spotidal/logs/album_diff_review.csv`.
+3. **tidal_id differs** — everything else matches but the TIDAL id an exact-ISRC
+   search finds disagrees with the stored one. Written to
+   `~/.config/spotidal/logs/tidal_diff_review.csv`. No dedicated review tab yet.
+4. **Not found** — no local match at all, by ISRC *or* by a normalized title+artist
+   fallback (`MusicLibrary.find_tracks_by_title_like`, ordered by title length so a
+   short/common fragment surfaces its exact-length match first — without that
+   ordering, a `LIMIT`-capped candidate set can silently miss the real match).
+   Written to `~/.config/spotidal/logs/not_found_review.csv`.
+
+ISRC alone is unreliable as the primary lookup key: TIDAL and Spotify frequently carry
+different regional/release ISRCs for the same recording — `tracks.isrc` is whatever
+the downloaded file's own tag says (from TIDAL), not Spotify's. This is exactly why
+`helpers/sync/match.py` never trusts ISRC alone either; the audit's title+artist
+fallback exists for the same reason. Review these results at `utils > doctors >
+playlists doctors > audit playlist consistency`'s output, or interactively at
+`/review` in the local search UI (see below).
 
 ## 4. Watcher and reconciliation
 
@@ -200,13 +279,29 @@ unchanged.
 MainMenu "search"                          spotidal/view/prompt.py
   → Controller.run loop                    spotidal/controller/controller.py
   → ControllerMain.run_search_ui()         spotidal/controller/controller_main.py
-  → run_server(library)                    spotidal/webui/server.py
+  → run_server(library, td_session=...)    spotidal/webui/server.py
       ThreadingHTTPServer on 127.0.0.1:8383, opens the browser, blocks until Ctrl+C
       GET /            → page.py PAGE_HTML           track browser
       GET /suggest     → page.py SUGGEST_PAGE_HTML    per-track mix suggestions
+      GET /review      → page.py REVIEW_PAGE_HTML     playlist-consistency review queue
       GET /api/*       → MusicLibrary.search_filter_options / playlist_tree /
                           genre_counts / search_tracks / suggest_tracks / camelot_related
+      GET/POST /api/review/*  → the review queue's own API, see below
 ```
+
+Open `/review` from the main page's Start menu ("Review Audit"). It reads what
+`audit_playlist_consistency` produced (see section 3 above for the four buckets):
+**Flagged** is DB-backed (`MusicLibrary.flagged_tracks()` / `set_review()`) and its
+tab lets you dismiss a flag or search TIDAL and pick a fix
+(`POST /api/review/fix` → `MusicLibrary.set_tidal_id()`, which also clears the flag).
+**Album differs** and **Not found** are CSV-backed
+(`~/.config/spotidal/logs/{album_diff,not_found}_review.csv`), read and dismissed
+generically through `REVIEW_CSV_BUCKETS` in `server.py`
+(`GET /api/review/<bucket>`, `POST /api/review/dismiss/<bucket>`) — add a bucket there
+(and a tab in `page.py`, following the existing two as a template) rather than
+one-off endpoints if another CSV-backed review category shows up. The `tidal-diff`
+bucket exists in `REVIEW_CSV_BUCKETS` and gets written by the audit, but has no tab
+yet — reachable via its endpoint or the raw CSV.
 
 Requires `databaseEnabled` and a resolvable local directory — same guard as every other
 `ControllerMain` method touching `self._library`; see `run_search_ui()`'s early returns.

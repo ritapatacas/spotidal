@@ -145,6 +145,11 @@ def bucket_for(genres, styles):
     return None
 
 
+def _is_various_artists(detail):
+    artists = {(a or "").strip().casefold() for a in detail.get("artists") or []}
+    return "various" in artists or "various artists" in artists
+
+
 def _norm(text):
     text = re.sub(r"[^\w]+", " ", text or "")
     return " ".join(unicodedata.normalize("NFC", text).casefold().split())
@@ -347,9 +352,16 @@ class DiscogsClient:
     def _parse_results(self, results, target, artist, strict, limit=10):
         matches = []
         for item in results[:limit]:
+            formats = {(f or "").strip().casefold() for f in (item.get("format") or [])}
             parts = re.split(r"\s+[\u2013\u2014-]\s+", item.get("title", ""), maxsplit=1)
             rel_title = parts[-1] if len(parts) > 1 else item.get("title", "")
             rel_artists = parts[0] if len(parts) > 1 else ""
+            # Various-artist compilations carry the searched-for track but
+            # their release-level genre/style reflects the whole comp, not
+            # this artist -- always wrong to tag from, so drop them outright
+            # rather than let them win on title match.
+            if "compilation" in formats or _norm(rel_artists) in ("various", "various artists"):
+                continue
             artist_ok = not rel_artists or _norm(artist) in _norm(rel_artists)
             # An exact normalized title is the strongest signal, but Discogs
             # drops edition markers and feat. credits the tag still carries, so
@@ -600,7 +612,9 @@ class GenreFiller:
             if q and all(_norm(q) != _norm(existing) for existing in queries):
                 queries.append(q)
         for query in queries:
-            cache_key = f"search:{_norm(query)}||{_norm(first_artist)}"
+            # v2: bumped so cached hits from before the various-artists filter
+            # (which stored unfiltered matches) get re-fetched under it.
+            cache_key = f"search2:{_norm(query)}||{_norm(first_artist)}"
             cached = client.cached(cache_key)
             if cached is not None:
                 found = cached.get("matches", [])
@@ -621,20 +635,32 @@ class GenreFiller:
         album = (entry["album"] or "").strip()
         first_artist = (entry["artist"] or "").split(",")[0].strip()
         matches = self._search_strict(client, entry, album, first_artist) if album else []
-        if not matches:
+        detail = self._first_non_va_detail(client, matches)
+        if detail is None:
             isrc = (entry["isrc"] or "").strip()
             if isrc:
                 release_id = client.isrc_to_discogs(isrc)
                 if release_id:
-                    detail = client.release_detail(release_id)
-                    if detail:
-                        bucket = bucket_for(detail.get("genres"), detail.get("styles"))
-                        style = (detail.get("styles") or [None])[0] or ""
+                    isrc_detail = client.release_detail(release_id)
+                    if isrc_detail and not _is_various_artists(isrc_detail):
+                        bucket = bucket_for(isrc_detail.get("genres"), isrc_detail.get("styles"))
+                        style = (isrc_detail.get("styles") or [None])[0] or ""
                         return track_id, entry, bucket, style, matches
-        detail = client.release_detail(matches[0]["id"]) if matches else None
         bucket = bucket_for((detail or {}).get("genres"), (detail or {}).get("styles"))
         style = ((detail or {}).get("styles") or [None])[0] or ""
         return track_id, entry, bucket, style, matches
+
+    @staticmethod
+    def _first_non_va_detail(client, matches):
+        # The search-time filter already drops obvious compilations, but a
+        # release's "Various Artists" credit only shows up once we fetch its
+        # full detail -- check every candidate rather than just matches[0],
+        # so one bad top hit doesn't sink an otherwise resolvable track.
+        for match in matches or []:
+            detail = client.release_detail(match["id"])
+            if detail and not _is_various_artists(detail):
+                return detail
+        return None
 
     def _apply(self, track_id, entry, bucket, style):
         errors = []
@@ -701,22 +727,27 @@ class GenreFiller:
                         self.warn(f"artist search failed for '{first_artist}': {error}")
             while True:
                 options = []
-                for candidate in candidates[:10]:
-                    genres = candidate.get("genres") or []
-                    styles = candidate.get("styles") or []
-                    if not genres:
-                        detail = client.release_detail(candidate["id"]) or {}
-                        genres = detail.get("genres") or []
-                        styles = detail.get("styles") or []
+                # Compilations aren't filtered out of this list -- the user
+                # may genuinely have no other release to pick from -- but
+                # flagging them means a VA comp never gets chosen by accident.
+                ranked = sorted(
+                    candidates[:10],
+                    key=lambda c: _is_various_artists(client.release_detail(c["id"]) or {}),
+                )
+                for candidate in ranked:
+                    detail = client.release_detail(candidate["id"]) or {}
+                    genres = detail.get("genres") or candidate.get("genres") or []
+                    styles = detail.get("styles") or candidate.get("styles") or []
                     taxonomy = " • ".join(
                         p for p in (
                             "/".join(genres),
                             "/".join(styles[:3]),
                         ) if p
                     )
+                    va_flag = " ⚠ Various Artists" if _is_various_artists(detail) else ""
                     options.append(Choice(value=candidate, name=(
                         f"{candidate['title']} ({candidate['year'] or '?'})"
-                        + (f" • {taxonomy}" if taxonomy else "")
+                        + (f" • {taxonomy}" if taxonomy else "") + va_flag
                     )))
                 options.append(Choice(value="__search__", name="nova pesquisa..."))
                 options.append(Choice(value=None, name="skip this track"))

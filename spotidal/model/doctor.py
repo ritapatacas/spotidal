@@ -17,7 +17,7 @@ from tqdm import tqdm
 
 from .helpers.td_downloader import (
     DownloadCancelled, TidalSessionStaleError, refresh_tidekeeper_token,
-    _current_rate_limit_delay,
+    clean_tmp, _current_rate_limit_delay,
 )
 from .helpers.sync.playlists_handler import get_td_playlists_wrapper
 from .helpers.tidalapi import get_all_playlist_tracks
@@ -185,6 +185,22 @@ class Doctor:
     def run_download_doctor(self):
         report = DoctorReport("download")
         td_session = (self._model.sessions or {}).get("td")
+
+        report.step("tmp cleanup")
+        try:
+            removed_parts = clean_tmp(self._settings.get_download_dir())
+            message = f"temporary download files cleaned ({removed_parts} parts folder(s) deleted)"
+            library = self._get_library()
+            if library:
+                purged = library.purge_temp_artifacts()
+                if purged["files"]:
+                    message += (
+                        f", {purged['files']} orphaned tmp track(s) purged from database"
+                        f" ({purged['tracks']} track record(s) removed)"
+                    )
+            report.ok(message)
+        except Exception as error:
+            report.warn(f"tmp cleanup failed: {error}")
 
         report.step("tidekeeper")
         try:

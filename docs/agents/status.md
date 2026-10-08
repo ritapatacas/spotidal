@@ -108,16 +108,60 @@ UI. See [architecture.md](architecture.md#web-ui--spotidalwebui).
 
 ## Uncommitted work in flight
 
-As of 2026-09-20, `spotidal/webui/` (`server.py`, `page.py`, `__init__.py`) is untracked
-despite being fully wired in — `controller_main.py` imports and calls it, and the
-`search` menu entry reaches it. It works (`poetry run python -m compileall` and manual
-launch both succeed); it's simply never been committed. `library.py`'s
-`search_filter_options`/`playlist_tree`/`genre_counts`/`search_tracks`/`suggest_tracks`
-and the `bpm`/`musical_key` columns it depends on **are** committed, from the RYM
-harvest batch — so the DB side of this feature predates and outlives its own UI's
-commit status.
+`spotidal/webui/` (`server.py`, `page.py`, `__init__.py`) — untracked as of 2026-09-20
+— is now committed.
 
-Check `git status` before assuming the committed history reflects what is on disk.
+As of 2026-09-25, the working tree has real uncommitted changes across
+`controller.py`, `controller_main.py`, `doctor.py`, `download.py`,
+`helpers/sync/search.py`, `library.py`, `rekordbox.py`, `view/prompt.py`,
+`view/view.py`, `webui/page.py`, `webui/server.py`, plus a new
+`docs/rekordbox-import.md` — see "Added/changed on 2026-09-25" below for what they
+are. Check `git status` before assuming the committed history reflects what is on
+disk.
+
+## Added/changed on 2026-09-25 — utils reorg, rekordbox export, playlist-consistency review
+
+Not yet committed (see above). In rough order:
+
+- **Rekordbox export** (`rekordbox.py`, `controller_main.py`, `controller.py`):
+  `export to rekordbox` moved to the main menu (it is no longer under `utils` at
+  all — `UtilsMenu.EXPORT_REKORDBOX` became dead code across the reorg below and was
+  removed), now scoped
+  to a playlist selection (checkbox list, not "every playlist") via a new `names`
+  param on `RekordboxExport.export_xml`/`export_m3u8`, and backs up any existing
+  `rekordbox.xml` to a timestamped `.bak-YYYYMMDD-HHMMSS` copy before overwriting.
+  New doc: [`docs/rekordbox-import.md`](../rekordbox-import.md) (user-facing, not
+  agent orientation — steps + tips for the actual rekordbox-side import).
+- **`utils` menu reorganized** around "composite routines at the top level, narrow
+  commands in submenus": `sync database` (new — chains reconcile → playlist refresh →
+  repair), `manage selected playlist`, `playlists doctors` (with `sync playlists
+  (audit + refresh)`, folding in what used to be a separate "watch playlist files"
+  step for the common case — see architecture.md), `genres`, `doctors` (nesting
+  `download doctors`, `database doctors`, `local files doctors`). Labels were also
+  reworded to say explicitly which two things they compare (`tidal vs local` /
+  `spotify vs local` / `disk vs db`) — see architecture.md's "Don't conflate these
+  three" table in workflows.md for why that distinction matters.
+- **`download doctor`** now runs a `tmp cleanup` step first (same as the standalone
+  `clean tmp files` action).
+- **`by_td_ids()` download loop** (`download.py`) only visits playlists with pending
+  tracks in its per-playlist progress loop, instead of walking every selected
+  playlist even when 0 are pending.
+- **`audit_playlist_consistency`** (`controller_main.py`) rewritten: four-way
+  classification (flagged title/artist / album differs / tidal_id differs / not
+  found) instead of one mixed "flagged" bucket; ISRC-only local lookup replaced with
+  an ISRC-then-title/artist fallback (`MusicLibrary.find_tracks_by_title_like`,
+  length-ordered); results persisted to CSV under `~/.config/spotidal/logs/` (DB for
+  the flagged bucket). See workflows.md section 3 for the full breakdown and the
+  "don't conflate" table.
+- **New `/review` page** in the local search UI (`webui/page.py`, `webui/server.py`):
+  interactive queue for the audit's four buckets (three have tabs), with a TIDAL
+  search-and-fix panel for the flagged bucket. `run_server()` now takes an optional
+  `td_session` for this.
+- **Sync performance fix** (`helpers/sync/search.py`): the MusicBrainz
+  original-album lookup — rate-limited to ~1 req/s process-wide — now only runs
+  after a TIDAL match is found, not unconditionally per track; this was making a
+  first-time sync of a large playlist (~1400 tracks) look frozen for many minutes.
+  Per-track `found:`/`not found:` logging added to `search_new_tracks_on_td()`.
 
 ## No test suite
 

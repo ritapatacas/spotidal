@@ -10,6 +10,10 @@ def _ask(questions, **kwargs):
 
 
 BACK_KEYBINDINGS = {"skip": [{"key": "escape"}]}
+CONFIRM_KEYBINDINGS = {
+    "confirm": [{"key": "y"}, {"key": "Y"}, {"key": "1"}],
+    "reject": [{"key": "n"}, {"key": "N"}, {"key": "0"}],
+}
 
 
 class Submenu:
@@ -58,10 +62,7 @@ class Prompt(Enum):
     SEARCH = "fuzzy"
     CONFIRM = "confirm"
 
-    kb_confirm = {
-        "confirm": [{"key": "y"}, {"key": "Y"}, {"key": "1"}],
-        "reject": [{"key": "n"}, {"key": "N"}, {"key": "0"}],
-    }
+    kb_confirm = CONFIRM_KEYBINDINGS
     INPUT = "input"
     EXPAND = "expand"
 
@@ -129,11 +130,12 @@ class MainMenu(MenuBase):
     DOWNLOAD = "download", Prompt.LIST
     CONVERT = "convert", Prompt.LIST
     SEARCH = "explore library", Prompt.LIST
+    EXPORT_REKORDBOX = "export to rekordbox", Prompt.LIST
     QUIT = "quit", Prompt.LIST
     UTILS = "utils", Prompt.LIST
     SETTINGS = "settings", Prompt.LIST
 
-    MAIN_OPT = [DOWNLOAD, SYNC, SEARCH, CONVERT, UTILS, SETTINGS, QUIT]
+    MAIN_OPT = [DOWNLOAD, SYNC, SEARCH, CONVERT, EXPORT_REKORDBOX, UTILS, SETTINGS, QUIT]
 
     def __init__(self):
         super().__init__(Prompt.LIST)
@@ -197,39 +199,42 @@ class UtilsMenu(MenuBase):
     REFRESH_SESSION = "refresh tidal session"
     TIDEKEEPER_DOCTOR = "run tidekeeper doctor"
     DOCTOR_DOWNLOAD = "download doctor (full pipeline check)"
-    DOCTOR_PLAYLISTS = "playlists doctor (selection vs db)"
-    DOCTOR_MISSING_TRACKS = "missing tracks doctor (download missing)"
-    DOWNLOAD_CURRENT_MISSING = "download current missing tracks"
+    DOCTOR_PLAYLISTS = "playlists doctor (tidal sync status, offers refresh)"
+    DOCTOR_MISSING_TRACKS = "missing tracks doctor (tidal vs local, download missing)"
     DOCTOR_MP3_QUALITY = "mp3 quality doctor (bitrate vs flac)"
-    RUN_WATCHER = "run local files watcher (update db)"
-    WATCH_PLAYLIST_FILES = "watch playlist files (update db)"
+    RUN_WATCHER = "run local files watcher (disk vs db)"
+    WATCH_PLAYLIST_FILES = "refresh playlist tracks from tidal (update db)"
     CONVERT_TO_FLAC = "convert non-flac files to flac"
     FIX_MISSING_DATA = "fix missing data (update db)"
+    SYNC_DATABASE = "sync database (disk + tidal playlists + repair)"
     FILL_GENRES = "fill genres from discogs (tags+db)"
     FILL_GENRES_RYM = "fill genres from rate your music (browser)"
-    EXPORT_REKORDBOX = "export playlists for rekordbox (xml+m3u8)"
     IMPORT_REKORDBOX_BPM_KEY = "import bpm/key from rekordbox (update db)"
-    AUDIT_CONSISTENCY = "audit playlist consistency (spotify vs db)"
+    AUDIT_CONSISTENCY = "audit playlist consistency (spotify vs local, deep check)"
+    SYNC_FROM_SPOTIFY = "sync from spotify (update db + tidal + not-downloaded list)"
     BACK = "back"
 
-    PLAYLISTS = "playlists"
-    DOWNLOAD = "download"
-    LOCAL_FILES = "local files"
-    DATABASE = "database"
+    PLAYLISTS = "playlists doctors"
+    DOCTORS = "doctors"
+    DOWNLOAD = "download doctors"
+    LOCAL_FILES = "local files doctors"
+    DATABASE = "database doctors"
     GENRES = "genres"
-    UTILS_OPT = [PLAYLISTS, DOWNLOAD, LOCAL_FILES, DATABASE, GENRES]
+    UTILS_OPT = [
+        SYNC_DATABASE, MANAGE_SELECTED_PLAYLIST, GENRES, DOCTORS,
+    ]
+
+    DOCTORS_OPT = [PLAYLISTS, DOWNLOAD, DATABASE, LOCAL_FILES]
 
     PLAYLISTS_OPT = [
-        MANAGE_SELECTED_PLAYLIST, DOCTOR_PLAYLISTS,
-        WATCH_PLAYLIST_FILES, EXPORT_REKORDBOX,
+        DOCTOR_PLAYLISTS, AUDIT_CONSISTENCY, SYNC_FROM_SPOTIFY,
     ]
     DOWNLOAD_OPT = [
-        DOCTOR_DOWNLOAD, DOCTOR_MISSING_TRACKS, DOWNLOAD_CURRENT_MISSING,
-        TIDEKEEPER_DOCTOR, CLEAN_TMP, REFRESH_SESSION,
+        DOCTOR_DOWNLOAD, DOCTOR_MISSING_TRACKS, TIDEKEEPER_DOCTOR,
+        CLEAN_TMP, REFRESH_SESSION,
     ]
     LOCAL_FILES_OPT = [
         DOCTOR_MP3_QUALITY, CONVERT_TO_FLAC, RUN_WATCHER,
-        WATCH_PLAYLIST_FILES, EXPORT_REKORDBOX, AUDIT_CONSISTENCY,
     ]
     DATABASE_OPT = [
         DOCTOR_PLAYLISTS, RUN_WATCHER, WATCH_PLAYLIST_FILES,
@@ -394,8 +399,8 @@ class TidekeeperSettingsMenu(MenuBase):
 
 
 class DefaultSelectionMenu(MenuBase):
-    VIEW = "view selection"
-    REFRESH = "refresh selection stats"
+    VIEW = "view selection (tidal vs local stats)"
+    REFRESH = "refresh selection stats (tidal vs local)"
     CHANGE = "change selection"
     BACK = "back"
     OPTIONS = [VIEW, REFRESH, CHANGE, BACK]
@@ -508,11 +513,7 @@ class SaveSelectionMenu(MenuBase):
                 "message": self.SAVE_SELECTION_Q,
                 "default": True,
                 "mandatory": False,
-                "keybindings": {
-                    **BACK_KEYBINDINGS,
-                    "confirm": [{"key": "y"}, {"key": "Y"}, {"key": "1"}],
-                    "reject": [{"key": "n"}, {"key": "N"}, {"key": "0"}],
-                },
+                "keybindings": {**BACK_KEYBINDINGS, **CONFIRM_KEYBINDINGS},
             }
         ]
         response = _ask(questions)

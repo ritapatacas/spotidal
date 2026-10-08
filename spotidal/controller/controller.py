@@ -16,6 +16,7 @@ from spotidal.model.helpers.sync.search import pop_not_found_tracks
 from spotidal.view.setup import get_credentials
 
 from spotidal.view.prompt import (
+    DefaultSelectionMenu,
     MainMenu,
     SelectionModeMenu,
     SettingsMenu,
@@ -65,6 +66,14 @@ class Controller:
         preselected = self.model.current_selection or set(self.playlists.load())
         return view.select_menu(playlists, preselected)
 
+    def _prompt_url_and(self, on_url):
+        url = view.url_menu()
+        if url:
+            try:
+                on_url(url)
+            except ValueError as error:
+                print(t.error(str(error)))
+
     def _run_task(self, func, *args, **kwargs):
         started = time.monotonic()
         result = func(*args, **kwargs)
@@ -104,12 +113,16 @@ class Controller:
                             "  sync: pick playlists and keep them in sync\n"
                             "  convert: convert downloaded FLAC files to MP3\n"
                             "  explore library: browse/filter your local library and get mixing suggestions (opens a browser tab)\n"
+                            "  export to rekordbox: pick playlists and export xml+m3u8 for rekordbox import\n"
                             "  utils: playlist selection, tmp cleanup, session refresh, database tools, rekordbox export\n"
                             "  settings: downloads and database configuration"
                         ))
 
                 elif menu == MainMenu.UTILS[0]:
                     self._utils_menu()
+
+                elif menu == MainMenu.EXPORT_REKORDBOX[0]:
+                    self._export_rekordbox()
 
                 elif menu == MainMenu.SYNC[0] or menu == MainMenu.DOWNLOAD[0]:
                     if self.model.current_selection:
@@ -152,15 +165,11 @@ class Controller:
                         self.model.current_selection = selection
 
                     elif action == SelectionModeMenu.URL:
-                        url = view.url_menu()
-                        if url:
-                            try:
-                                if menu == MainMenu.DOWNLOAD[0]:
-                                    self._run_task(self.app.download_url, url)
-                                else:
-                                    self._run_task(self.app.sync_url, url)
-                            except ValueError as error:
-                                print(t.error(str(error)))
+                        self._prompt_url_and(lambda url: self._run_task(
+                            self.app.download_url if menu == MainMenu.DOWNLOAD[0]
+                            else self.app.sync_url,
+                            url,
+                        ))
                         continue
 
                     elif action == SelectionModeMenu.BACK[0]:
@@ -198,7 +207,7 @@ class Controller:
     def _download_settings(self):
         while True:
             action = view.download_settings_menu()
-            if action in (None, "back"):
+            if self._is_back(action):
                 return
             if action == "download directory":
                 self.app.change_download_dir()
@@ -212,23 +221,23 @@ class Controller:
     def _default_selection(self):
         while True:
             action = view.default_selection_menu()
-            if action in (None, "back"):
+            if self._is_back(action):
                 return
-            if action == "view selection":
+            if action == DefaultSelectionMenu.VIEW:
                 selection = self.playlists.load()
                 if not selection:
                     print("> no default playlists selected")
                 else:
                     stats = self.app.get_selection_stats(selection)
                     print(t.display_selection_table(stats))
-            elif action == "refresh selection stats":
+            elif action == DefaultSelectionMenu.REFRESH:
                 selection = self.playlists.load()
                 if not selection:
                     print("> no default playlists selected")
                 else:
                     stats = self._run_task(self.app.get_selection_stats, selection, force_refresh=True)
                     print(t.display_selection_table(stats))
-            elif action == "change selection":
+            elif action == DefaultSelectionMenu.CHANGE:
                 selection = view.select_menu(
                     self.playlists.names(), self.playlists.load()
                 )
@@ -255,13 +264,11 @@ class Controller:
             elif action == SelectionModeMenu.LOAD:
                 selection |= set(self.playlists.load())
             elif action == SelectionModeMenu.URL:
-                url = view.url_menu()
-                if url:
-                    try:
-                        name = self.app.resolve_playlist_name_from_url(url)
-                        selection.add(name)
-                    except ValueError as error:
-                        print(t.error(str(error)))
+                self._prompt_url_and(
+                    lambda url: selection.add(
+                        self.app.resolve_playlist_name_from_url(url)
+                    )
+                )
             if not selection:
                 continue
             if view.confirm_selection_menu():
@@ -270,21 +277,20 @@ class Controller:
         print(t.display_selection_table(stats))
 
     def _utils_menu(self):
-        submenu = view.Submenu(UtilsMenu.UTILS_Q, UtilsMenu.UTILS_OPT)
-        while True:
-            action = submenu.display()
-            if action is None:
-                return
-            if action == UtilsMenu.PLAYLISTS:
-                self._utils_playlists()
-            elif action == UtilsMenu.DOWNLOAD:
-                self._utils_download()
-            elif action == UtilsMenu.LOCAL_FILES:
-                self._utils_local_files()
-            elif action == UtilsMenu.DATABASE:
-                self._utils_database()
-            elif action == UtilsMenu.GENRES:
-                self._utils_genres()
+        self._run_submenu(UtilsMenu.UTILS_Q, UtilsMenu.UTILS_OPT, {
+            UtilsMenu.SYNC_DATABASE: self._sync_database,
+            UtilsMenu.MANAGE_SELECTED_PLAYLIST: self._default_selection,
+            UtilsMenu.DOCTORS: self._utils_doctors,
+            UtilsMenu.GENRES: self._utils_genres,
+        })
+
+    def _utils_doctors(self):
+        self._run_submenu(UtilsMenu.DOCTORS, UtilsMenu.DOCTORS_OPT, {
+            UtilsMenu.PLAYLISTS: self._utils_playlists,
+            UtilsMenu.DOWNLOAD: self._utils_download,
+            UtilsMenu.DATABASE: self._utils_database,
+            UtilsMenu.LOCAL_FILES: self._utils_local_files,
+        })
 
     def _run_submenu(self, title, options, handlers):
         submenu = view.Submenu(title, options)
@@ -296,19 +302,40 @@ class Controller:
             if handler:
                 handler()
 
+    @staticmethod
+    def _is_back(action):
+        return action in (None, "back")
+
     def _utils_playlists(self):
         self._run_submenu(UtilsMenu.PLAYLISTS, UtilsMenu.PLAYLISTS_OPT, {
-            UtilsMenu.MANAGE_SELECTED_PLAYLIST: self._default_selection,
-            UtilsMenu.DOCTOR_PLAYLISTS: lambda: self._run_task(self.app.doctor_playlists),
-            UtilsMenu.WATCH_PLAYLIST_FILES: self._watch_playlist_files,
-            UtilsMenu.EXPORT_REKORDBOX: lambda: self._run_task(self.app.export_rekordbox),
+            UtilsMenu.DOCTOR_PLAYLISTS: self._playlists_doctor,
+            UtilsMenu.AUDIT_CONSISTENCY: self._audit_consistency,
+            UtilsMenu.SYNC_FROM_SPOTIFY: self._sync_from_spotify,
         })
+
+    def _playlists_doctor(self):
+        self._run_task(self.app.doctor_playlists)
+        names = set(self.playlists.load())
+        if not names:
+            print(t.warning(
+                "no default playlist selection to refresh"
+                " (utils > playlists > manage selected playlist)"
+            ))
+            return
+        if not view.confirm_menu("refresh these playlists from TIDAL now?"):
+            return
+        stats = self._run_task(self.app.get_selection_stats, names, force_refresh=True)
+        print(t.display_selection_table(stats))
+
+    def _export_rekordbox(self):
+        names = self._select_menu(self.app.playlist_names())
+        if names:
+            self._run_task(self.app.export_rekordbox, names)
 
     def _utils_download(self):
         self._run_submenu(UtilsMenu.DOWNLOAD, UtilsMenu.DOWNLOAD_OPT, {
             UtilsMenu.DOCTOR_DOWNLOAD: lambda: self._run_task(self.app.doctor_download),
             UtilsMenu.DOCTOR_MISSING_TRACKS: lambda: self._run_task(self.app.doctor_missing_tracks),
-            UtilsMenu.DOWNLOAD_CURRENT_MISSING: lambda: self._run_task(self.app.download_current_missing_tracks),
             UtilsMenu.TIDEKEEPER_DOCTOR: self.app.tidekeeper_doctor,
             UtilsMenu.CLEAN_TMP: lambda: self._run_task(self.app.clean_tmp),
             UtilsMenu.REFRESH_SESSION: self._refresh_tidal_session,
@@ -325,9 +352,6 @@ class Controller:
             UtilsMenu.DOCTOR_MP3_QUALITY: lambda: self._run_task(self.app.doctor_mp3_quality),
             UtilsMenu.CONVERT_TO_FLAC: lambda: self._run_task(self.app.normalize_to_flac),
             UtilsMenu.RUN_WATCHER: lambda: self._run_task(self.app.reconcile_library),
-            UtilsMenu.WATCH_PLAYLIST_FILES: self._watch_playlist_files,
-            UtilsMenu.EXPORT_REKORDBOX: lambda: self._run_task(self.app.export_rekordbox),
-            UtilsMenu.AUDIT_CONSISTENCY: self._audit_consistency,
         })
 
     def _audit_consistency(self):
@@ -335,15 +359,37 @@ class Controller:
         if names:
             self._run_task(self.app.audit_playlist_consistency, names)
 
+    def _sync_from_spotify(self):
+        # Live Spotify playlist names (not self.app.playlist_names(), which
+        # is DB-only) so playlists that aren't in the db yet are selectable.
+        names = self._select_menu(self.playlists.names())
+        if names:
+            self._run_task(self.app.sync_from_spotify, names)
+
     def _utils_database(self):
         self._run_submenu(UtilsMenu.DATABASE, UtilsMenu.DATABASE_OPT, {
-            UtilsMenu.DOCTOR_PLAYLISTS: lambda: self._run_task(self.app.doctor_playlists),
+            UtilsMenu.DOCTOR_PLAYLISTS: self._playlists_doctor,
             UtilsMenu.RUN_WATCHER: lambda: self._run_task(self.app.reconcile_library),
             UtilsMenu.WATCH_PLAYLIST_FILES: self._watch_playlist_files,
             UtilsMenu.FIX_MISSING_DATA: lambda: self._run_task(self.app.fill_missing_database_data),
             UtilsMenu.FILL_GENRES: lambda: self._run_task(self.app.fill_genres),
             UtilsMenu.IMPORT_REKORDBOX_BPM_KEY: lambda: self._run_task(self.app.import_rekordbox_metadata),
         })
+
+    def _sync_database(self):
+        print(t.log("1/3 reconciling local files"))
+        self._run_task(self.app.reconcile_library)
+
+        names = self._select_menu(self.app.playlist_names())
+        if names:
+            print(t.log("2/3 refreshing playlist membership from TIDAL"))
+            stats = self._run_task(self.app.get_selection_stats, names, force_refresh=True)
+            print(t.display_selection_table(stats))
+        else:
+            print(t.log("2/3 skipped (no playlists selected)"))
+
+        print(t.log("3/3 repairing database"))
+        self._run_task(self.app.fill_missing_database_data)
 
     def _utils_genres(self):
         self._run_submenu(UtilsMenu.GENRES, UtilsMenu.GENRES_OPT, {
@@ -363,23 +409,19 @@ class Controller:
             print(t.log(f"{name} ({count} track(s))"))
 
     def _view_genre_styles(self):
-        styles_menu = view.Submenu(
-            UtilsMenu.VIEW_GENRE_STYLES, UtilsMenu.VIEW_STYLES_OPT
-        )
-        while True:
-            action = styles_menu.display()
-            if action is None:
-                return
-            if action == UtilsMenu.ALL_GENRES:
-                self._print_genre_styles()
-            elif action == UtilsMenu.SELECT_GENRE:
-                genres = [row[0] for row in self.app.final_genres()]
-                if not genres:
-                    print(t.log("no genres defined"))
-                    continue
-                genre = view.ListMenu("select genre", genres).display()
-                if genre:
-                    self._print_genre_styles(genre)
+        self._run_submenu(UtilsMenu.VIEW_GENRE_STYLES, UtilsMenu.VIEW_STYLES_OPT, {
+            UtilsMenu.ALL_GENRES: self._print_genre_styles,
+            UtilsMenu.SELECT_GENRE: self._print_genre_styles_for_selected_genre,
+        })
+
+    def _print_genre_styles_for_selected_genre(self):
+        genres = [row[0] for row in self.app.final_genres()]
+        if not genres:
+            print(t.log("no genres defined"))
+            return
+        genre = view.ListMenu("select genre", genres).display()
+        if genre:
+            self._print_genre_styles(genre)
 
     def _print_genre_styles(self, genre_name=None):
         rows = self.app.final_genre_styles(genre_name)
@@ -405,23 +447,22 @@ class Controller:
                 print(t.log(f"style '{style.strip()}' added"))
 
     def _fill_genres_scoped(self):
-        fill_menu = view.Submenu(
-            UtilsMenu.FILL_GENRES, UtilsMenu.FILL_GENRES_OPT
-        )
-        while True:
-            action = fill_menu.display()
-            if action is None:
-                return
-            if action == UtilsMenu.FILL_SELECTED:
-                names = self.playlists.load()
-                if not names:
-                    print(t.warning("no default selection; use 'select playlists'"))
-                    continue
-                self._fill_genres_for_playlists(names)
-            elif action == UtilsMenu.FILL_SELECT_PLAYLISTS:
-                names = self._select_menu(self.app.playlist_names())
-                if names:
-                    self._fill_genres_for_playlists(names)
+        self._run_submenu(UtilsMenu.FILL_GENRES, UtilsMenu.FILL_GENRES_OPT, {
+            UtilsMenu.FILL_SELECTED: self._fill_genres_for_default_selection,
+            UtilsMenu.FILL_SELECT_PLAYLISTS: self._fill_genres_for_chosen_playlists,
+        })
+
+    def _fill_genres_for_default_selection(self):
+        names = self.playlists.load()
+        if not names:
+            print(t.warning("no default selection; use 'select playlists'"))
+            return
+        self._fill_genres_for_playlists(names)
+
+    def _fill_genres_for_chosen_playlists(self):
+        names = self._select_menu(self.app.playlist_names())
+        if names:
+            self._fill_genres_for_playlists(names)
 
     def _fill_genres_for_playlists(self, names):
         track_ids = self.app.track_ids_for_playlists(names)
@@ -437,19 +478,16 @@ class Controller:
         self._run_task(self.app.fill_genres, track_ids)
 
     def _harvest_rym_scoped(self):
-        submenu = view.Submenu(UtilsMenu.FILL_GENRES_RYM, UtilsMenu.FILL_RYM_OPT)
-        while True:
-            action = submenu.display()
-            if action is None:
-                return
-            if action == UtilsMenu.FILL_SELECTED:
-                self._harvest_rym_scope("selection")
-            elif action == UtilsMenu.FILL_ALL:
-                self._harvest_rym_scope("all")
-            elif action == UtilsMenu.FILL_SELECT_PLAYLISTS:
-                names = self._select_menu(self.app.playlist_names())
-                if names:
-                    self._harvest_rym_scope(names)
+        self._run_submenu(UtilsMenu.FILL_GENRES_RYM, UtilsMenu.FILL_RYM_OPT, {
+            UtilsMenu.FILL_SELECTED: lambda: self._harvest_rym_scope("selection"),
+            UtilsMenu.FILL_ALL: lambda: self._harvest_rym_scope("all"),
+            UtilsMenu.FILL_SELECT_PLAYLISTS: self._harvest_rym_scope_chosen_playlists,
+        })
+
+    def _harvest_rym_scope_chosen_playlists(self):
+        names = self._select_menu(self.app.playlist_names())
+        if names:
+            self._harvest_rym_scope(names)
 
     def _harvest_rym_scope(self, scope):
         from spotidal.model.settings import Settings
@@ -478,20 +516,17 @@ class Controller:
             print(t.warning(f"no tracks found for scope '{label}'"))
             return
         print(t.busy(f"rym harvest: {len(rows)} track(s) in scope '{label}'"))
-        try:
-            stats = self._run_task(_rym_harvest, filler, rows)
-        except Exception as error:
-            print(t.error(f"rym harvest failed: {error}"))
-            print(t.log(
-                "install the browser once with: poetry run playwright install chrome"
-            ))
+        stats, error = _run_rym_harvest_or_report(
+            lambda: self._run_task(_rym_harvest, filler, rows)
+        )
+        if error:
             return
         _log_rym_stats(stats)
 
     def _notifications_settings(self):
         while True:
             action = view.notifications_settings_menu()
-            if action in (None, "back"):
+            if self._is_back(action):
                 return
             if action == "notification sound delay (minutes)":
                 value = view.notification_delay_menu(self.app.get_notify_sound_delay())
@@ -512,14 +547,14 @@ class Controller:
     def _database_settings(self):
         while True:
             action = view.database_settings_menu()
-            if action in (None, "back"):
+            if self._is_back(action):
                 return
             self.app.change_database_option(action)
 
     def _tidekeeper_settings(self):
         while True:
             action = view.tidekeeper_settings_menu()
-            if action in (None, "back"):
+            if self._is_back(action):
                 return
             print(t.log(f"Tidekeeper setting '{action}' will be implemented later"))
 
@@ -603,15 +638,31 @@ def _rym_harvest(filler, rows, retry=False):
         filler.client.close()
 
 
-def _log_rym_stats(stats):
+def _run_rym_harvest_or_report(run):
+    """Run a zero-arg RYM harvest callable, reporting the shared failure message."""
+    try:
+        return run(), None
+    except Exception as error:
+        print(t.error(f"rym harvest failed: {error}"))
+        print(t.log(
+            "install the browser once with: poetry run playwright install chrome"
+        ))
+        return None, error
+
+
+def _log_harvest_stats(stats, label="harvest"):
     print(t.log(
-        f"rym harvest done: {stats['filled']} filled, "
+        f"{label} done: {stats['filled']} filled, "
         f"{stats['skipped']} skipped, {stats['unmatched']} unmatched"
     ))
     stopped = stats["stopped"]
     if stopped is not None:
         print(t.warning(f"stopped early: {stopped}"))
     return stopped
+
+
+def _log_rym_stats(stats):
+    return _log_harvest_stats(stats, label="rym harvest")
 
 
 def run_harvest_cli(args):
@@ -659,14 +710,9 @@ def _run_discogs_harvest_cli(settings, scope, retry, max_calls):
         f" ({'authenticated' if filler.client.authenticated else 'anonymous'})"
     ))
     stats = filler.harvest(rows, retry_unmatched=retry)
-    print(t.log(
-        f"harvest done: {stats['filled']} filled, {stats['skipped']} skipped, "
-        f"{stats['unmatched']} unmatched"
-    ))
-    stopped = stats["stopped"]
+    stopped = _log_harvest_stats(stats)
     if stopped is None:
         return 0
-    print(t.warning(f"stopped early: {stopped}"))
     return 3 if isinstance(stopped, BudgetExhausted) else 2
 
 
@@ -688,13 +734,8 @@ def _run_rym_harvest_cli(settings, scope, retry, max_pages):
         print(t.warning(f"no tracks found for scope '{scope}'"))
         return 0
     print(t.busy(f"rym harvest: {len(rows)} track(s) in scope '{scope}'"))
-    try:
-        stats = _rym_harvest(filler, rows, retry)
-    except Exception as error:
-        print(t.error(f"rym harvest failed: {error}"))
-        print(t.log(
-            "install the browser once with: poetry run playwright install chrome"
-        ))
+    stats, error = _run_rym_harvest_or_report(lambda: _rym_harvest(filler, rows, retry))
+    if error:
         return 1
     stopped = _log_rym_stats(stats)
     if stopped is None:

@@ -1,6 +1,8 @@
 import shutil
 import subprocess
 import sys
+import time
+from datetime import datetime
 from pathlib import Path
 
 from .library import MusicLibrary, uuid7
@@ -48,7 +50,6 @@ def convert_file(flac_file, output_file, library_root=None, database_path=None):
         library = MusicLibrary(library_root, database_path)
         library.import_file(flac_file)
         _import_mp3_with_own_track_id(library, output_file)
-    print(t.log(f"mp3 conversion complete for {output_file}"))
     return True
 
 
@@ -107,20 +108,42 @@ class FlacToMp3:
             f"({already_converted} already have an mp3)"
         ))
 
-        converted = 0
         reindexed = 0
-        failed = 0
         for flac_file in flac_files:
             output_file = self._mp3_target(flac_file)
-            if output_file.exists():
+            # Only (re-)import an already-converted pair when the mp3 is
+            # still missing its own track_id — otherwise this already ran
+            # to completion on a previous convert() and re-parsing tags +
+            # rewriting both DB rows on every run is pure waste.
+            if output_file.exists() and not self.library.read_track_id(output_file):
                 self.library.import_file(flac_file)
                 _import_mp3_with_own_track_id(self.library, output_file)
                 reindexed += 1
-                continue
+
+        # Sequential on purpose: concurrent ffmpeg conversions were observed
+        # silently truncating output mp3s to ~30s on this library's storage
+        # (a USB drive) — ffmpeg exited 0, so nothing caught it, and ~846
+        # files were corrupted before the mp3 quality doctor caught it via
+        # the flac/mp3 duration check. Do not re-parallelize this without
+        # a integrity check (e.g. compare converted duration against the
+        # source before trusting the result) proven safe under real I/O
+        # contention first.
+        converted = 0
+        failed = 0
+        total_pending = len(pending)
+        start = time.monotonic()
+        for flac_file in pending:
+            output_file = self._mp3_target(flac_file)
             if convert_file(
                 flac_file, output_file, self.library.root_path, self.database_path
             ):
                 converted += 1
+                elapsed = time.monotonic() - start
+                tail = f"[{t.format_elapsed(elapsed)}] @ {datetime.now():%H:%M:%S}"
+                line = t.busy(
+                    f"converted {converted}/{total_pending} - /mp3/{output_file.relative_to(self.mp3_path)}"
+                )
+                print(t.right_align(line, tail))
             else:
                 failed += 1
 

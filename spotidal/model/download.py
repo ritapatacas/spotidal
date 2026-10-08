@@ -111,7 +111,10 @@ class Download:
             settings.get("downloadPath", "~/Spotidal"),
             settings.get("databaseLocation"),
         )
-        library.reconcile_all()
+        with tqdm(
+            desc=t.busy("reconciling local library"), unit="file", file=sys.stdout
+        ) as progress:
+            library.reconcile_all(on_progress=progress.update)
 
     def by_td_id(self, td_id):
         self._reset_download_settings()
@@ -176,12 +179,13 @@ class Download:
                 "pending_total": pending_total,
                 "start": job_start,
             }
-            for playlist_number, (playlist, tracks, total, skipped) in enumerate(playlists, 1):
+            to_download = [item for item in playlists if item[1]]
+            for playlist_number, (playlist, tracks, total, skipped) in enumerate(to_download, 1):
                 self._download_tidal_playlist(
                     playlist,
                     tracks,
                     playlist_number=playlist_number,
-                    playlist_total=len(playlists),
+                    playlist_total=len(to_download),
                     progress=progress,
                     total_tracks=total,
                     skipped_tracks=skipped,
@@ -374,6 +378,13 @@ class Download:
                     )
                     if result is None:
                         errors += 1
+                        progress.update(1 - track_progress)
+                        track_progress = 1.0
+                        progress.clear()
+                        tqdm.write(
+                            t.error(f"failed to download '{track.name}'"),
+                            file=sys.stdout,
+                        )
                     elif result[1] or result[2]:
                         processed += 1
                         if result[1]:
@@ -392,12 +403,12 @@ class Download:
                                 f"downloaded {t.grey(title)} "
                                 f"({progress.downloaded_count}/{progress.download_total} - "
                                 f"{percentage:.0f}%)"
-                            ) + "\n", file=sys.stdout)
+                            ), file=sys.stdout)
                         else:
                             linked_existing = len(result) > 3 and result[3]
                             suffix = " " + t.grey("(linked database ids)") if linked_existing else ""
                             tqdm.write(
-                                t.busy(" skipped ") + t.grey(track.name) + suffix + "\n",
+                                t.busy(" skipped ") + t.grey(track.name) + suffix,
                                 file=sys.stdout,
                             )
                 except Exception as error:
@@ -407,15 +418,26 @@ class Download:
                         progress.update(-track_progress)
                     errors += 1
                     tqdm.write(
-                        t.error(f"failed to download '{track.name}': {error}") + "\n",
+                        t.error(f"failed to download '{track.name}': {error}"),
                         file=sys.stdout,
                     )
             return downloaded, errors, processed
 
         try:
+            total_downloaded = total_errors = total_processed = 0
             for batch_number, batch in enumerate(batches, 1):
-                download_batch(batch_number, batch)
+                downloaded, errors, processed = download_batch(batch_number, batch)
+                total_downloaded += downloaded
+                total_errors += errors
+                total_processed += processed
             clean_tmp(Files.SETTINGS.load().get("flacDirectory"))
+            if total > 0:
+                progress.clear()
+                tqdm.write(t.log(
+                    f"{playlist_label} done: {total_downloaded} downloaded, "
+                    f"{total_processed - total_downloaded} skipped, "
+                    f"{total_errors} failed"
+                ), file=sys.stdout)
         finally:
             if own_progress:
                 progress.close()

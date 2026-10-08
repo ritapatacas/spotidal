@@ -97,17 +97,6 @@ async def td_search(
         isrc = sp_track.get("external_ids", {}).get("isrc")
         return _musicbrainz.original_album_name(isrc)
 
-    # Ask MusicBrainz up front whether sp_track's own reported album is
-    # actually the original studio release, or a compilation/reissue —
-    # Spotify (and TIDAL) both serve compilation copies of well-known
-    # tracks constantly, so this can't be told from the Spotify data alone.
-    original_album_name = await asyncio.to_thread(_musicbrainz_original_album_name)
-    sp_album_name = sp_track.get("album", {}).get("name")
-    needs_choice = bool(
-        original_album_name and sp_album_name
-        and _match.simple(original_album_name).lower() != _match.simple(sp_album_name).lower()
-    )
-
     # Plan A/B: strict match (ISRC, or exact duration+name+artist) against
     # sp_track's own reported album, then a standalone track search. Plan
     # C/D: same order, but with a looser match (wider duration tolerance,
@@ -127,6 +116,23 @@ async def td_search(
         if track_search:
             spotify_result = track_search
             break
+
+    # Only ask MusicBrainz whether sp_track's reported album is actually the
+    # original studio release (vs. a compilation/reissue) once there's
+    # already a spotify_result to weigh it against — MusicBrainz's public
+    # API is rate-limited to ~1 req/s process-wide (see musicbrainz.py),
+    # so calling it unconditionally for every track (as before) serialized
+    # a bulk sync of hundreds of new tracks to minutes of near-zero visible
+    # progress before most of them even reached a TIDAL search.
+    needs_choice = False
+    original_album_name = None
+    if spotify_result:
+        original_album_name = await asyncio.to_thread(_musicbrainz_original_album_name)
+        sp_album_name = sp_track.get("album", {}).get("name")
+        needs_choice = bool(
+            original_album_name and sp_album_name
+            and _match.simple(original_album_name).lower() != _match.simple(sp_album_name).lower()
+        )
 
     if not needs_choice:
         if spotify_result:
@@ -194,15 +200,23 @@ async def search_new_tracks_on_td(
             len(tracks_to_search), len(sp_tracks), playlist_name
         )
     )
+    async def _search_and_log(sp_track):
+        result = await _req.repeat_on_request_error(
+            td_search, sp_track, semaphore, td_session, playlist_name
+        )
+        name = sp_track.get("name")
+        track_artist = ", ".join(a["name"] for a in sp_track.get("artists", []))
+        if result:
+            found_artist = result.artist.name if result.artist else ""
+            atqdm.write(t.log_grey(f"  found: {name} — {track_artist} -> {result.name} — {found_artist}"))
+        else:
+            atqdm.write(t.log_grey(f"  not found: {name} — {track_artist}"))
+        return result
+
     semaphore = asyncio.Semaphore(config.get("max_concurrency", 10))
     rate_limiter_task = asyncio.create_task(_run_rate_limiter(semaphore))
     search_results = await atqdm.gather(
-        *[
-            _req.repeat_on_request_error(
-                td_search, t, semaphore, td_session, playlist_name
-            )
-            for t in tracks_to_search
-        ],
+        *[_search_and_log(sp_track) for sp_track in tracks_to_search],
         desc=t.busy(task_description),
     )
     rate_limiter_task.cancel()

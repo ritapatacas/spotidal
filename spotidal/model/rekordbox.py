@@ -1,5 +1,7 @@
+import shutil
 import sqlite3
 import urllib.parse
+from datetime import datetime
 from pathlib import Path
 from xml.sax.saxutils import quoteattr
 
@@ -73,8 +75,12 @@ class RekordboxExport:
             return "baitadas"
         return folder_path or ""
 
-    def _playlists(self):
-        """(folder_path, name) -> ordered, de-duplicated absolute mp3 paths on disk."""
+    def _playlists(self, names=None):
+        """(folder_path, name) -> ordered, de-duplicated absolute mp3 paths on disk.
+
+        `names`, when given, restricts the export to playlists whose name is in
+        that set (playlist identity is the name; see data-model.md).
+        """
         connection = sqlite3.connect(self.database_path)
         try:
             playlists = []
@@ -82,6 +88,8 @@ class RekordboxExport:
                 "SELECT playlist_id, name, owner, folder_path FROM playlists ORDER BY name"
             ).fetchall()
             for playlist_id, name, owner, folder_path in rows:
+                if names is not None and name not in names:
+                    continue
                 tracks = []
                 seen = set()
                 for track_id, path in connection.execute(
@@ -119,12 +127,12 @@ class RekordboxExport:
         finally:
             connection.close()
 
-    def export_m3u8(self, output_path):
+    def export_m3u8(self, output_path, names=None):
         """One .m3u8 per playlist. Simple, but re-importing duplicates them."""
         output_path = Path(output_path).expanduser().resolve()
         output_path.mkdir(parents=True, exist_ok=True)
         written, skipped = [], []
-        for _, name, tracks in self._playlists():
+        for _, name, tracks in self._playlists(names):
             if not tracks:
                 skipped.append(name)
                 continue
@@ -180,20 +188,36 @@ class RekordboxExport:
             1 for segment in node if segment != "_playlists"
         )
 
-    def export_xml(self, output_path, folder_name=FOLDER_NAME):
-        """A single rekordbox.xml holding every playlist under one folder,
+    @staticmethod
+    def _backup(output_path):
+        """Timestamped copy of an existing rekordbox.xml before it's overwritten."""
+        if not output_path.exists():
+            return None
+        backup_path = output_path.with_name(
+            output_path.name + "." + datetime.now().strftime("bak-%Y%m%d-%H%M%S")
+        )
+        shutil.copy2(output_path, backup_path)
+        return backup_path
+
+    def export_xml(self, output_path, folder_name=FOLDER_NAME, names=None):
+        """A single rekordbox.xml holding the selected playlists under one folder,
         nested by each playlist's folder_path (owner overrides win: Anto's
         playlists land under "Anto", other owners under "baitadas").
+
+        `names`, when given, restricts the export to playlists whose name is in
+        that set; otherwise every playlist in the library is exported.
 
         Imports the whole tree in one action and carries per-track metadata,
         which .m3u8 cannot. rekordbox still reads the XML as a separate,
         read-only tree: re-exporting refreshes it on reload, but copying it back
-        into the collection is a manual drag either way.
+        into the collection is a manual drag either way. Any existing file at
+        `output_path` is backed up alongside it before being overwritten.
         """
         output_path = Path(output_path).expanduser().resolve()
         output_path.parent.mkdir(parents=True, exist_ok=True)
+        backup_path = self._backup(output_path)
 
-        all_playlists = self._playlists()
+        all_playlists = self._playlists(names)
         playlists = [(folder, name, tracks) for folder, name, tracks in all_playlists if tracks]
         skipped = [name for _, name, tracks in all_playlists if not tracks]
 
@@ -242,6 +266,7 @@ class RekordboxExport:
         output_path.write_text("\n".join(lines), encoding="utf-8")
         return {
             "path": output_path,
+            "backup": backup_path,
             "playlists": len(playlists),
             "tracks": len(collection),
             "skipped": skipped,
