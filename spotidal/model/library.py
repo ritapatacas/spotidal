@@ -1246,6 +1246,91 @@ class MusicLibrary:
                 [(playlist_id, track_id) for track_id in set(track_ids)],
             )
 
+    def replace_playlist_tracks(self, playlist_id, track_ids):
+        """Make playlist_tracks membership match `track_ids` exactly.
+
+        Used by the Spotify->DB sync so tracks removed from the live
+        Spotify playlist also drop out of the local membership, instead of
+        only ever accumulating (as plain add_playlist_tracks would).
+        """
+        track_ids = set(track_ids)
+        with self._connect() as connection:
+            existing = {
+                row[0] for row in connection.execute(
+                    "SELECT track_id FROM playlist_tracks WHERE playlist_id = ?",
+                    (playlist_id,),
+                ).fetchall()
+            }
+            to_remove = existing - track_ids
+            if to_remove:
+                connection.executemany(
+                    "DELETE FROM playlist_tracks WHERE playlist_id = ? AND track_id = ?",
+                    [(playlist_id, track_id) for track_id in to_remove],
+                )
+            connection.executemany(
+                "INSERT OR IGNORE INTO playlist_tracks(playlist_id,track_id) VALUES(?,?)",
+                [(playlist_id, track_id) for track_id in track_ids],
+            )
+        return {"added": len(track_ids - existing), "removed": len(to_remove)}
+
+    def upsert_track_from_spotify(self, title, artist, album, isrc, spotify_id):
+        """Create (or update identifying fields on) a track row sourced from
+        a live Spotify playlist, with no local file yet. This is the only
+        way a track discovered in Spotify but entirely absent from the
+        database gets a track_id to hang playlist membership off of.
+        """
+        now = _now()
+        with self._connect() as connection:
+            track_id = None
+            if isrc:
+                row = connection.execute(
+                    "SELECT track_id FROM tracks WHERE isrc = ?", (isrc,)
+                ).fetchone()
+                track_id = row[0] if row else None
+            if not track_id and spotify_id:
+                row = connection.execute(
+                    "SELECT track_id FROM tracks WHERE spotify_id = ?", (spotify_id,)
+                ).fetchone()
+                track_id = row[0] if row else None
+            if track_id:
+                connection.execute(
+                    "UPDATE tracks SET title=?, artist=?, album=COALESCE(?, album), "
+                    "isrc=COALESCE(?, isrc), spotify_id=COALESCE(?, spotify_id), "
+                    "updated_at=? WHERE track_id=?",
+                    (title, artist, album, isrc, spotify_id, now, track_id),
+                )
+                return track_id
+            track_id = uuid7()
+            connection.execute(
+                "INSERT INTO tracks(track_id,title,artist,album,isrc,spotify_id,created_at,updated_at) "
+                "VALUES(?,?,?,?,?,?,?,?)",
+                (track_id, title, artist, album, isrc, spotify_id, now, now),
+            )
+        return track_id
+
+    def missing_downloads_for_playlists(self, names):
+        """Tracks in the given playlists (by current DB membership) with no
+        local file on disk, backend-agnostic (any `files` row counts,
+        regardless of whether it came from TIDAL or Soulseek).
+        """
+        if not names:
+            return []
+        placeholders = ",".join("?" for _ in names)
+        with self._connect() as connection:
+            return connection.execute(
+                f"SELECT DISTINCT p.name, t.track_id, t.title, t.artist, t.album, "
+                "t.isrc, t.spotify_id, t.tidal_id "
+                "FROM playlists p "
+                "JOIN playlist_tracks pt ON pt.playlist_id = p.playlist_id "
+                "JOIN tracks t ON t.track_id = pt.track_id "
+                "WHERE p.name IN "
+                f"({placeholders}) AND NOT EXISTS ("
+                "  SELECT 1 FROM files f WHERE f.track_id = t.track_id "
+                "  AND f.missing_at IS NULL"
+                ") ORDER BY p.name, t.title COLLATE NOCASE",
+                list(names),
+            ).fetchall()
+
     def mark_missing(self, location_id, path):
         with self._connect() as connection:
             connection.execute(

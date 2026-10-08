@@ -310,6 +310,7 @@ class Controller:
         self._run_submenu(UtilsMenu.PLAYLISTS, UtilsMenu.PLAYLISTS_OPT, {
             UtilsMenu.DOCTOR_PLAYLISTS: self._playlists_doctor,
             UtilsMenu.AUDIT_CONSISTENCY: self._audit_consistency,
+            UtilsMenu.SYNC_FROM_SPOTIFY: self._sync_from_spotify,
         })
 
     def _playlists_doctor(self):
@@ -357,6 +358,13 @@ class Controller:
         names = self._select_menu(self.app.playlist_names())
         if names:
             self._run_task(self.app.audit_playlist_consistency, names)
+
+    def _sync_from_spotify(self):
+        # Live Spotify playlist names (not self.app.playlist_names(), which
+        # is DB-only) so playlists that aren't in the db yet are selectable.
+        names = self._select_menu(self.playlists.names())
+        if names:
+            self._run_task(self.app.sync_from_spotify, names)
 
     def _utils_database(self):
         self._run_submenu(UtilsMenu.DATABASE, UtilsMenu.DATABASE_OPT, {

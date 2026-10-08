@@ -418,6 +418,139 @@ class ControllerMain:
         for sample in debug_samples:
             print(t.log_grey(sample))
 
+    NOT_DOWNLOADED_CSV = Path("~/.config/spotidal/logs/not_downloaded.csv").expanduser()
+    NOT_DOWNLOADED_FIELDS = [
+        "playlist", "title", "artist", "album", "isrc", "spotify_id", "tidal_id",
+    ]
+
+    def sync_playlists_from_spotify(self, names):
+        """Pull each playlist's current Spotify state and make the local DB
+        match it: tracks already on file are matched by ISRC/title+artist
+        (same matching audit_playlist_consistency uses), tracks with no
+        local match at all get a track row created so they have somewhere
+        to live, and playlist_tracks membership is replaced wholesale so
+        tracks removed from Spotify also drop out of the DB.
+        """
+        if not self._library:
+            print(t.error("local database is unavailable"))
+            return []
+        sp_session = self.model.sessions["sp"]
+        synced_names = []
+
+        def _clean(text):
+            return _normalize_for_match(_strip_diacritics(_strip_version_suffix(text)))
+
+        def _artists_of(name_or_names):
+            return {
+                _normalize_for_match(_strip_diacritics(a))
+                for source in (
+                    [name_or_names] if isinstance(name_or_names, str) else name_or_names
+                )
+                for a in _split_artists(source)
+            }
+
+        for name in names:
+            info = self._playlist_info(name)
+            sp_id = info.get("sp_id") if info else None
+            if not sp_id:
+                print(t.warning(f"skipping '{name}': no matching spotify playlist id"))
+                continue
+            tracks = asyncio.run(
+                get_tracks_from_sp_playlist(sp_session, {"id": sp_id, "name": name})
+            )
+            track_ids = []
+            added_new = 0
+            for track in tqdm(
+                tracks, desc=t.busy(f"syncing '{name}' from spotify"), unit="track"
+            ):
+                title = track.get("name")
+                artists = [a["name"] for a in track.get("artists", [])]
+                artist = ", ".join(artists)
+                album = (track.get("album") or {}).get("name")
+                isrc = (track.get("external_ids") or {}).get("isrc")
+                spotify_id = track.get("id")
+                sp_artists = _artists_of(artists)
+
+                local = self._library.find_track_by_isrc(isrc)
+                if not local:
+                    clean_title = _clean(title)
+                    words = re.findall(r"\w+", _strip_version_suffix(title))
+                    title_fragment = max(words, key=len) if words else title
+                    candidates = self._library.find_tracks_by_title_like(title_fragment)
+                    local = next(
+                        (
+                            c for c in candidates
+                            if _clean(c["title"]) == clean_title
+                            and _artists_of(c["artist"] or "") & sp_artists
+                        ),
+                        None,
+                    )
+                if local:
+                    track_id = local["track_id"]
+                else:
+                    track_id = self._library.upsert_track_from_spotify(
+                        title, artist, album, isrc, spotify_id
+                    )
+                    added_new += 1
+                track_ids.append(track_id)
+
+            playlist_id = self._library.upsert_playlist(
+                name, spotify_playlist_id=sp_id, total_tracks=len(track_ids)
+            )
+            diff = self._library.replace_playlist_tracks(playlist_id, track_ids)
+            synced_names.append(name)
+            print(t.log(
+                f"'{name}': {len(track_ids)} track(s) from spotify "
+                f"({added_new} new to db, {diff['added']} added, "
+                f"{diff['removed']} removed from membership)"
+            ))
+        return synced_names
+
+    def list_not_downloaded(self, names, write_csv=True):
+        if not self._library:
+            print(t.error("local database is unavailable"))
+            return []
+        rows = self._library.missing_downloads_for_playlists(names)
+        result = [
+            {
+                "playlist": playlist_name, "title": title, "artist": artist,
+                "album": album, "isrc": isrc, "spotify_id": spotify_id,
+                "tidal_id": tidal_id,
+            }
+            for playlist_name, _track_id, title, artist, album, isrc, spotify_id, tidal_id in rows
+        ]
+        if write_csv:
+            self.NOT_DOWNLOADED_CSV.parent.mkdir(parents=True, exist_ok=True)
+            with open(self.NOT_DOWNLOADED_CSV, "w", newline="", encoding="utf-8") as handle:
+                writer = csv.DictWriter(handle, fieldnames=self.NOT_DOWNLOADED_FIELDS)
+                writer.writeheader()
+                writer.writerows(result)
+        print(t.log(
+            f"{len(result)} track(s) not downloaded across {len(names)} playlist(s)"
+            + (f" — see {self.NOT_DOWNLOADED_CSV}" if write_csv and result else "")
+        ))
+        return result
+
+    def sync_from_spotify(self, names):
+        """Composite: Spotify -> DB -> TIDAL, then report what's still not
+        downloaded. Covers the full "catch up with what changed in Spotify"
+        flow in one call.
+        """
+        print(t.log(f"1/4 syncing {len(names)} playlist(s) db from spotify"))
+        synced_names = self.sync_playlists_from_spotify(names)
+        if not synced_names:
+            print(t.warning("nothing synced; stopping"))
+            return []
+
+        print(t.log("2/4 syncing matched tracks to tidal"))
+        self.sync(synced_names)
+
+        print(t.log("3/4 reconciling local files (disk vs db)"))
+        self.reconcile_library()
+
+        print(t.log("4/4 listing tracks not yet downloaded"))
+        return self.list_not_downloaded(synced_names)
+
     def audit_playlist_consistency(self, names):
         if not self._library:
             print(t.error("local database is unavailable"))

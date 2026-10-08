@@ -211,6 +211,7 @@ class UtilsMenu(MenuBase):
     FILL_GENRES_RYM = "fill genres from rate your music (browser)"
     IMPORT_REKORDBOX_BPM_KEY = "import bpm/key from rekordbox (update db)"
     AUDIT_CONSISTENCY = "audit playlist consistency (spotify vs local, deep check)"
+    SYNC_FROM_SPOTIFY = "sync from spotify (update db + tidal + not-downloaded list)"
     BACK = "back"
 
     PLAYLISTS = "playlists doctors"
@@ -226,7 +227,7 @@ class UtilsMenu(MenuBase):
     DOCTORS_OPT = [PLAYLISTS, DOWNLOAD, DATABASE, LOCAL_FILES]
 
     PLAYLISTS_OPT = [
-        DOCTOR_PLAYLISTS, AUDIT_CONSISTENCY,
+        DOCTOR_PLAYLISTS, AUDIT_CONSISTENCY, SYNC_FROM_SPOTIFY,
     ]
     DOWNLOAD_OPT = [
         DOCTOR_DOWNLOAD, DOCTOR_MISSING_TRACKS, TIDEKEEPER_DOCTOR,
